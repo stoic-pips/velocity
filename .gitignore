@@ -1,0 +1,22 @@
+# ── Python ──────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.env
+
+# ── Node / React Native ────────────
+node_modules/
+.expo/
+*.tsbuildinfo
+
+# ── IDE ─────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── OS ──────────────────────────────
+.DS_Store
+Thumbs.db
