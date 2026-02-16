@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     print("  Dunam Velocity – MT5 Scalping Bot API")
     print(f"  Listening on {settings.host}:{settings.port}")
     print(f"  Small-profit threshold: ${settings.small_profit_usd}")
-    print(f"  Max lot: {settings.max_lot_size}  Max positions: {settings.max_open_positions}")
+    print(f"  Auto-Lot: {settings.auto_lot_enabled}  Risk: {settings.risk_multiplier}  Max positions: {settings.max_open_positions}")
     print("=" * 60)
 
     # Attempt MT5 connection at startup (non-fatal)
@@ -92,5 +92,5 @@ if __name__ == "__main__":
         "main:app",
         host=settings.host,
         port=settings.port,
-        reload=False,
+        reload=True,
     )

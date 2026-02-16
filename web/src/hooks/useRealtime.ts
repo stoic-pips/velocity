@@ -3,7 +3,8 @@ import { supabase } from '@/lib/supabase';
 
 export interface BotStatus {
     id: number;
-    is_active: boolean;
+    is_active?: boolean;
+    running?: boolean;
     status_message: string;
     last_updated: string;
 }
@@ -27,7 +28,13 @@ export const useRealtime = () => {
                 .from('bot_status')
                 .select('*')
                 .single();
-            if (statusData) setBotStatus(statusData);
+            if (statusData) {
+                const status = statusData as BotStatus;
+                setBotStatus({
+                    ...status,
+                    is_active: status.running ?? status.is_active ?? false
+                });
+            }
 
             const { data: positionsData } = await supabase
                 .from('positions')
@@ -48,7 +55,11 @@ export const useRealtime = () => {
                 'postgres_changes',
                 { event: '*', schema: 'public', table: 'bot_status' },
                 (payload) => {
-                    setBotStatus(payload.new as BotStatus);
+                    const status = payload.new as BotStatus;
+                    setBotStatus({
+                        ...status,
+                        is_active: status.running ?? status.is_active ?? false
+                    });
                 }
             )
             .on(

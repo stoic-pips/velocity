@@ -55,7 +55,7 @@ async def get_status() -> dict:
     positions = _mt5.get_positions()
     return {
         "bot": {
-            "running": _scalper.is_running,
+            "is_active": _scalper.is_running,
             "strategy_running": _strategy.is_running,
             "mt5_connected": _mt5.is_connected,
         },
@@ -65,11 +65,21 @@ async def get_status() -> dict:
     }
 
 
+@router.get("/symbols")
+async def get_symbols() -> dict:
+    """Return all available symbols grouped by category."""
+    if not _mt5.is_connected:
+        # Try to connect if not already
+        _mt5.connect()
+    
+    return _mt5.get_categorized_symbols()
+
+
 @router.post("/start")
 async def start_bot() -> dict:
     """Connect to MT5 and start the scalper engine."""
     if _scalper.is_running:
-        return {"status": "Bot is already running", "running": True}
+        return {"status": "Bot is already running", "is_active": True}
 
     # Ensure MT5 is connected
     if not _mt5.is_connected:
@@ -79,18 +89,18 @@ async def start_bot() -> dict:
 
     _scalper.start()
     _strategy.start()
-    return {"status": "Bot started", "running": True}
+    return {"status": "Bot started", "is_active": True}
 
 
 @router.post("/stop")
 async def stop_bot() -> dict:
     """Stop the scalper engine."""
     if not _scalper.is_running:
-        return {"status": "Bot is already stopped", "running": False}
+        return {"status": "Bot is already stopped", "is_active": False}
 
     _scalper.stop()
     _strategy.stop()
-    return {"status": "Bot stopped", "running": False}
+    return {"status": "Bot stopped", "is_active": False}
 
 
 @router.post("/open")
@@ -143,9 +153,11 @@ class ConfigUpdateRequest(BaseModel):
     mt5_password: Optional[str] = None
     mt5_server: Optional[str] = None
     small_profit_usd: Optional[float] = None
-    max_lot_size: Optional[float] = None
+    auto_lot_enabled: Optional[bool] = None
+    risk_multiplier: Optional[float] = None
     max_open_positions: Optional[int] = None
     strategy_enabled: Optional[bool] = None
+    strategy_symbols: Optional[str] = None
 
 
 @router.get("/config")
@@ -156,9 +168,11 @@ async def get_config() -> dict:
         "mt5_login": settings.mt5_login,
         "mt5_server": settings.mt5_server,
         "small_profit_usd": settings.small_profit_usd,
-        "max_lot_size": settings.max_lot_size,
+        "auto_lot_enabled": settings.auto_lot_enabled,
+        "risk_multiplier": settings.risk_multiplier,
         "max_open_positions": settings.max_open_positions,
         "strategy_enabled": settings.strategy_enabled,
+        "strategy_symbols": settings.strategy_symbols,
     }
 
 
@@ -183,12 +197,16 @@ async def update_config(body: ConfigUpdateRequest) -> dict:
         updates["MT5_SERVER"] = body.mt5_server
     if body.small_profit_usd is not None:
         updates["SMALL_PROFIT_USD"] = str(body.small_profit_usd)
-    if body.max_lot_size is not None:
-        updates["MAX_LOT_SIZE"] = str(body.max_lot_size)
+    if body.auto_lot_enabled is not None:
+        updates["AUTO_LOT_ENABLED"] = str(body.auto_lot_enabled).lower()
+    if body.risk_multiplier is not None:
+        updates["RISK_MULTIPLIER"] = str(body.risk_multiplier)
     if body.max_open_positions is not None:
         updates["MAX_OPEN_POSITIONS"] = str(body.max_open_positions)
     if body.strategy_enabled is not None:
         updates["STRATEGY_ENABLED"] = str(body.strategy_enabled).lower()
+    if body.strategy_symbols is not None:
+        updates["STRATEGY_SYMBOLS"] = body.strategy_symbols
 
     if not updates:
         return {"status": "No changes provided"}

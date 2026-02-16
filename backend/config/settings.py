@@ -24,10 +24,15 @@ class Settings(BaseSettings):
 
     # ── Scalper / Risk ──────────────────────────────────────────────────────
     small_profit_usd: float = Field(default=2.0, description="Small-profit close threshold (USD)")
-    profit_check_interval: int = Field(default=5, description="Seconds between profit checks")
-    max_lot_size: float = Field(default=1.0, description="Maximum allowed lot size per order")
+    profit_check_interval: float = Field(default=1.0, description="Seconds between profit checks")
+    auto_lot_enabled: bool = Field(default=True, description="Calculate lot size automatically based on equity")
+    risk_multiplier: float = Field(default=0.01, description="Lots per $1000 equity")
     max_open_positions: int = Field(default=10, description="Maximum simultaneous open positions")
     strategy_enabled: bool = True
+    strategy_symbols: str = Field(default="EURUSD,USDJPY,GBPUSD,Volatility 75 Index", description="Comma-separated list of symbols to scan")
+    strategy_check_interval: float = Field(default=0.5, description="Seconds between strategy scans")
+    strategy_timeframe: str = Field(default="M1", description="MT5 Timeframe (M1, M5, M15, M30, H1)")
+    live_candle_signals: bool = Field(default=False, description="Trade on current forming candle if True")
 
     # ── Supabase ────────────────────────────────────────────────────────────
     supabase_url: str = Field(default="", description="Supabase project URL")
@@ -37,6 +42,7 @@ class Settings(BaseSettings):
         "env_file": ".env",
         "env_file_encoding": "utf-8",
         "case_sensitive": False,
+        "extra": "ignore",
     }
 
 

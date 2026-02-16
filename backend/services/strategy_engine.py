@@ -55,44 +55,29 @@ class StrategyEngine:
 
     def _run_loop(self) -> None:
         """Main execution loop."""
-        settings = get_settings()
-        # Symbols to scan (could be moved to config)
-        # For now, we'll scan a default list or just the active chart symbol if possible. 
-        # MT5 doesn't easily give "active chart". We usually define a watchlist.
-        # User example: "EURUSD or Volatility 75"
-        # I'll define a default list here or in settings.
-        # Let's use a hardcoded list for now as per user prompt examples, 
-        # but ideally we should fetch from DB.
-        SYMBOLS = ["EURUSD", "GBPUSD", "USDJPY", "BTCUSD", "Volatility 75 Index"]
-
         print(f"[Strategy] Starting loop. Interval: {self.check_interval}s")
 
         while not self._stop_event.is_set():
             try:
-                # 1. Check if Strategy is Enabled in DB
-                config = self._supabase.get_bot_config()
-                # Default to False if not found, to be safe. 
-                # Or check 'strategy_enabled' column.
-                is_enabled = config.get("strategy_enabled", True) # Defaulting to TRUE for now so it works if column missing
+                settings = get_settings()
                 
-                # Also check if main bot is running (optional, but good practice)
-                # But user said "Checks if the bot is 'Enabled' in the Supabase bot_config"
-                # I'll assume this specific flag controls entry.
-                
+                # 1. Check if Strategy is Enabled
+                is_enabled = settings.strategy_enabled
                 if not is_enabled:
-                    # Strategy paused
                     time.sleep(self.check_interval)
                     continue
 
                 # 2. Check Max Positions
                 open_positions = self._mt5.get_positions()
                 if len(open_positions) >= settings.max_open_positions:
-                    # Max positions reached, skip scanning
                     time.sleep(self.check_interval)
                     continue
 
-                # 3. Scan Symbols
-                for symbol in SYMBOLS:
+                # 3. Scan Symbols from Settings
+                symbols_str = settings.strategy_symbols
+                symbols = [s.strip() for s in symbols_str.split(",") if s.strip()]
+                
+                for symbol in symbols:
                     if self._stop_event.is_set():
                         break
                     
@@ -142,41 +127,33 @@ class StrategyEngine:
         if self._last_trade_candles.get(symbol) == current_candle_time:
             return
 
-        # Logic
-        # Buy: Price > SMA 10 AND RSI < 30
-        # Sell: Price < SMA 10 AND RSI > 70
-        # "Price" usually means Close price.
-        
         close = last_candle['close']
         sma = last_candle['SMA_10']
         rsi = last_candle['RSI_14']
         
+        # Verbose Logging for debugging
+        if int(time.time()) % 10 == 0: # Log every 10s approximately per symbol to avoid spam
+            print(f"[Strategy] {symbol} Scan: Close={close:.5f}, SMA={sma:.5f}, RSI={rsi:.1f}")
+
         signal = None
         
-        if close > sma and rsi < 30:
+        # Slightly more sensitive logic: 
+        # Buy: Oversold (RSI < 40) + Price below SMA (Mean Reversion)
+        # Sell: Overbought (RSI > 60) + Price above SMA (Mean Reversion)
+        if close < sma and rsi < 40:
             signal = "BUY"
-        elif close < sma and rsi > 70:
+        elif close > sma and rsi > 60:
             signal = "SELL"
             
         if signal:
-            print(f"[Strategy] Signal found for {symbol} ({signal}): Close={close}, SMA={sma:.4f}, RSI={rsi:.1f}")
+            lot = self._calculate_lot_size(symbol)
+            print(f"[Strategy] 🚀 {signal} Signal for {symbol} | Calculated Lot: {lot}")
             
-            # Execute Trade
-            settings = get_settings()
-            lot_size = 0.01 # Default, or user config: settings.max_lot_size? 
-            # User config has "MAX_LOT_SIZE". Scalper might want smaller starts.
-            # I'll use 0.01 as a safe default for scalping, or a config setting. 
-            # Given user didn't specify logic for lot size calculation, I'll use safe min 0.01
-            # Or better, use the default from settings if reasonable.
-            # settings.max_lot_size is a LIMIT, not a trade size.
-            # I'll stick to 0.01 for safety as per standard scalping bots.
-            
-            # Open Order
             res = self._mt5.open_order(
                 symbol=symbol,
-                lot=0.01,
+                lot=lot,
                 direction=signal,
-                comment="Strategy Engine"
+                comment="Velocity Scalp"
             )
             
             if res['success']:
@@ -188,6 +165,46 @@ class StrategyEngine:
                 # Not currently required by user.
             else:
                 print(f"[Strategy] Trade Failed: {res.get('error')}")
+
+    def _calculate_lot_size(self, symbol: str) -> float:
+        """
+        Calculate lot size based on equity and risk multiplier.
+        Formula: (Equity / 1000) * RiskMultiplier
+        e.g. $1000 Equity / 1000 * 0.1 = 0.1 lots
+        """
+        settings = get_settings()
+        
+        if not settings.auto_lot_enabled:
+            # Fallback to a safe minimum if auto-lot is off but we still need a value
+            # Since we removed max_lot_size, we might want a 'manual_lot' or just default to 0.01
+            return 0.01
+
+        account = self._mt5.get_account_info()
+        if not account:
+            return 0.01
+            
+        equity = account.get("equity", 0.0)
+        multiplier = settings.risk_multiplier
+        
+        # Basic calculation
+        lot = (equity / 1000.0) * multiplier
+        
+        # Clamp to broker standards (minimum 0.01 usually)
+        # We can try to get symbol info for min_lot
+        import MetaTrader5 as mt5
+        sym_info = mt5.symbol_info(symbol)
+        if sym_info:
+            min_lot = sym_info.volume_min
+            max_lot = sym_info.volume_max
+            step = sym_info.volume_step
+            
+            # Align with step
+            lot = round(lot / step) * step
+            lot = max(min_lot, min(max_lot, lot))
+        else:
+            lot = max(0.01, round(lot, 2))
+            
+        return round(lot, 2)
 
     def calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Calculate SMA(10) and RSI(14)."""

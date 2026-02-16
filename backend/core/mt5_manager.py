@@ -104,6 +104,8 @@ class MT5Manager:
                 "free_margin": info.margin_free,
                 "profit": info.profit,
                 "currency": info.currency,
+                "trade_allowed": info.trade_allowed,
+                "algo_trading_enabled": mt5.terminal_info().trade_allowed if mt5.terminal_info() else False
             }
 
     def get_positions(self) -> list[dict]:
@@ -140,6 +142,59 @@ class MT5Manager:
                 "time": tick.time,
             }
 
+    def get_categorized_symbols(self) -> dict[str, list[str]]:
+        """
+        Fetch all available symbols and group them by folder (category).
+        e.g. {'Forex Major': ['EURUSD', ...], 'Synthetic Indices': [...]}
+        """
+        with self._api_lock:
+            symbols = mt5.symbols_get()
+            if symbols is None:
+                print("[MT5] symbols_get() returned None. Check connection.")
+                return {}
+            
+            if not symbols:
+                print("[MT5] symbols_get() returned an empty list.")
+                return {}
+
+            print(f"[MT5] Fetched {len(symbols)} symbols from terminal.")
+            categories: dict[str, list[str]] = {}
+            for s in symbols:
+                # Path format is usually 'Folder\Subfolder\Symbol'
+                parts = s.path.split("\\")
+                category = parts[0] if parts else "Other"
+                
+                if category not in categories:
+                    categories[category] = []
+                categories[category].append(s.name)
+            
+            # Sort categories and symbols for better UX
+            sorted_categories = dict(sorted(categories.items()))
+            for cat in sorted_categories:
+                sorted_categories[cat].sort()
+                
+            return sorted_categories
+
+    def get_filling_mode(self, symbol: str) -> int:
+        """
+        Detect the supported filling mode for a symbol.
+        Returns mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_IOC, or mt5.ORDER_FILLING_RETURN.
+        """
+        with self._api_lock:
+            info = mt5.symbol_info(symbol)
+            if info is None:
+                return mt5.ORDER_FILLING_IOC
+            
+            # Check for FOK (Fill or Kill)
+            # Standard bits: SYMBOL_FILLING_FOK (1), SYMBOL_FILLING_IOC (2)
+            if info.filling_mode & 1:
+                return mt5.ORDER_FILLING_FOK
+            # Check for IOC (Immediate or Cancel)
+            elif info.filling_mode & 2:
+                return mt5.ORDER_FILLING_IOC
+            
+            return mt5.ORDER_FILLING_RETURN
+
     # ── Order Execution ─────────────────────────────────────────────────────
 
     def open_order(
@@ -160,9 +215,6 @@ class MT5Manager:
             settings = get_settings()
 
             # ── Validations ────────────────────────────────────────────────────
-            if lot > settings.max_lot_size:
-                return {"success": False, "error": f"Lot {lot} exceeds max {settings.max_lot_size}"}
-
             current_positions = self.get_positions()
             if len(current_positions) >= settings.max_open_positions:
                 return {"success": False, "error": f"Max open positions ({settings.max_open_positions}) reached"}
@@ -190,7 +242,7 @@ class MT5Manager:
                 "magic": 234000,
                 "comment": comment,
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_IOC,
+                "type_filling": self.get_filling_mode(symbol),
             }
 
             result = mt5.order_send(request)
@@ -234,7 +286,7 @@ class MT5Manager:
                 "magic": 234000,
                 "comment": "Velocity close",
                 "type_time": mt5.ORDER_TIME_GTC,
-                "type_filling": mt5.ORDER_FILLING_IOC,
+                "type_filling": self.get_filling_mode(pos.symbol),
             }
 
             result = mt5.order_send(request)

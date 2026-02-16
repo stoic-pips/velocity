@@ -10,7 +10,7 @@ const API_KEY = process.env.NEXT_PUBLIC_API_KEY || '';
 
 export interface BotStatusResponse {
     bot: {
-        running: boolean;
+        is_active: boolean;
         mt5_connected: boolean;
     };
     account: Record<string, unknown>;
@@ -21,7 +21,7 @@ export interface BotStatusResponse {
 export interface BotActionResponse {
     status?: string;
     error?: string;
-    running: boolean;
+    is_active: boolean;
 }
 
 // ── Fetch Helper ───────────────────────────────────────────────────────────
@@ -80,8 +80,11 @@ export interface ConfigResponse {
     mt5_login: number;
     mt5_server: string;
     small_profit_usd: number;
-    max_lot_size: number;
+    auto_lot_enabled: boolean;
+    risk_multiplier: number;
     max_open_positions: number;
+    strategy_enabled: boolean;
+    strategy_symbols: string;
 }
 
 export interface ConfigUpdatePayload {
@@ -89,8 +92,11 @@ export interface ConfigUpdatePayload {
     mt5_password?: string;
     mt5_server?: string;
     small_profit_usd?: number;
-    max_lot_size?: number;
+    auto_lot_enabled?: boolean;
+    risk_multiplier?: number;
     max_open_positions?: number;
+    strategy_enabled?: boolean;
+    strategy_symbols?: string;
 }
 
 /** Get current backend configuration. */
@@ -123,4 +129,15 @@ export function openOrder(payload: OpenOrderPayload): Promise<Record<string, unk
         method: 'POST',
         body: JSON.stringify(payload),
     });
+}
+
+/** Get categorized symbols from MT5. */
+export async function getSymbols(): Promise<Record<string, string[]>> {
+    const res = await fetch(`${API_URL}/api/symbols`, {
+        headers: {
+            'X-API-Key': API_KEY,
+        },
+    });
+    if (!res.ok) throw new Error('Failed to fetch symbols');
+    return res.json();
 }

@@ -80,8 +80,12 @@ class SupabaseSync:
         if not self._client:
             return
         try:
+            # Filter only expected columns for 'account_snapshots'
+            allowed_cols = {"login", "server", "balance", "equity", "margin", "free_margin", "profit", "currency"}
+            filtered_info = {k: v for k, v in account_info.items() if k in allowed_cols}
+            
             payload = {
-                **account_info,
+                **filtered_info,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             self._client.table("account_snapshots").insert(payload).execute()
@@ -106,10 +110,11 @@ class SupabaseSync:
             if not positions:
                 return
 
-            # 2. Add timestamp to each position
+            # 2. Filter core columns and add timestamp 
+            allowed_cols = {"ticket", "symbol", "profit", "type", "volume", "price_open", "price_current"}
             payload = [
                 {
-                    **pos,
+                    **{k: v for k, v in pos.items() if k in allowed_cols},
                     "updated_at": datetime.now(timezone.utc).isoformat()
                 }
                 for pos in positions
@@ -143,7 +148,6 @@ class SupabaseSync:
                 "mt5_login": str(settings.mt5_login) if settings.mt5_login else None,
                 "mt5_server": settings.mt5_server,
                 "small_profit_usd": settings.small_profit_usd,
-                "max_lot_size": settings.max_lot_size,
                 "max_open_positions": settings.max_open_positions,
                 "strategy_enabled": getattr(settings, "strategy_enabled", True),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
