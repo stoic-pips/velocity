@@ -79,11 +79,6 @@ export function checkSmallProfit(threshold?: number): Promise<Record<string, unk
 export interface ConfigResponse {
     mt5_login: number;
     mt5_server: string;
-    small_profit_usd: number;
-    auto_lot_enabled: boolean;
-    risk_multiplier: number;
-    max_open_positions: number;
-    strategy_enabled: boolean;
     strategy_symbols: string;
 }
 
@@ -91,11 +86,6 @@ export interface ConfigUpdatePayload {
     mt5_login?: number;
     mt5_password?: string;
     mt5_server?: string;
-    small_profit_usd?: number;
-    auto_lot_enabled?: boolean;
-    risk_multiplier?: number;
-    max_open_positions?: number;
-    strategy_enabled?: boolean;
     strategy_symbols?: string;
 }
 

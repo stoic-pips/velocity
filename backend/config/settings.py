@@ -28,11 +28,18 @@ class Settings(BaseSettings):
     auto_lot_enabled: bool = Field(default=True, description="Calculate lot size automatically based on equity")
     risk_multiplier: float = Field(default=0.01, description="Lots per $1000 equity")
     max_open_positions: int = Field(default=10, description="Maximum simultaneous open positions")
+    max_loss_percent: float = Field(default=10.0, description="Max floating loss as % of equity before close-all")
     strategy_enabled: bool = True
     strategy_symbols: str = Field(default="EURUSD,USDJPY,GBPUSD,Volatility 75 Index", description="Comma-separated list of symbols to scan")
     strategy_check_interval: float = Field(default=0.5, description="Seconds between strategy scans")
     strategy_timeframe: str = Field(default="M1", description="MT5 Timeframe (M1, M5, M15, M30, H1)")
     live_candle_signals: bool = Field(default=False, description="Trade on current forming candle if True")
+    
+    # ── Volatility Filter ──────────────────────────────────────────────────
+    volatility_filter_enabled: bool = Field(default=True, description="Enable ATR and RVI volatility filtering")
+    min_atr_threshold: float = Field(default=0.0001, description="Minimum ATR to allow trades")
+    volatility_avg_period: int = Field(default=20, description="Period for relative volatility average")
+    extreme_vol_threshold: float = Field(default=2.5, description="ATR multiplier to trigger profit doubling")
 
     # ── Supabase ────────────────────────────────────────────────────────────
     supabase_url: str = Field(default="", description="Supabase project URL")

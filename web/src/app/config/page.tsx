@@ -3,23 +3,25 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { PageContainer } from '@/components/PageContainer';
 import { getConfig, updateConfig as apiUpdateConfig, getSymbols } from '@/lib/api-client';
-import { Settings, ShieldAlert, Cpu, Search, Check, X, ChevronDown, Percent } from 'lucide-react';
+import { Settings, ShieldAlert, Check, X, ChevronDown, Search } from 'lucide-react';
 import clsx from 'clsx';
 
+interface ConfigUpdatePayload {
+    mt5_login: number;
+    mt5_password?: string;
+    mt5_server?: string;
+    strategy_symbols: string;
+}
+
 export default function ConfigPage() {
-    const [config, setConfig] = useState({
-        small_profit_usd: 2.0,
-        auto_lot_enabled: true,
-        risk_multiplier: 0.01,
-        max_open_positions: 10,
-        mt5_login: '',
+    const [config, setConfig] = useState<ConfigUpdatePayload>({
+        mt5_login: 0,
         mt5_password: '',
         mt5_server: '',
-        strategy_enabled: true,
         strategy_symbols: '',
     });
     const [availableSymbols, setAvailableSymbols] = useState<Record<string, string[]>>({});
-    const [terminalStatus, setTerminalStatus] = useState({ algo_trading: true, trade_allowed: true });
+    const [terminalStatus, setTerminalStatus] = useState({ algo_trading: true, trade_allowed: true, mt5_connected: true });
     const [loading, setLoading] = useState(false);
     const [selectionLoading, setSelectionLoading] = useState(true);
     const [showPassword, setShowPassword] = useState(false);
@@ -44,7 +46,7 @@ export default function ConfigPage() {
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const [cfg, symbols] = await Promise.all([getConfig(), getSymbols()]);
+                const [data, symbols] = await Promise.all([getConfig(), getSymbols()]);
 
                 // Also get status to check terminal health
                 const statusResponse = await fetch('http://localhost:8000/api/status', {
@@ -53,23 +55,21 @@ export default function ConfigPage() {
 
                 const status = statusResponse ? await statusResponse.json() : null;
 
-                setConfig(c => ({
-                    ...c,
-                    mt5_login: String(cfg.mt5_login || ''),
-                    mt5_server: cfg.mt5_server || '',
-                    small_profit_usd: cfg.small_profit_usd,
-                    auto_lot_enabled: cfg.auto_lot_enabled,
-                    risk_multiplier: cfg.risk_multiplier,
-                    max_open_positions: cfg.max_open_positions,
-                    strategy_enabled: cfg.strategy_enabled,
-                    strategy_symbols: cfg.strategy_symbols || '',
-                }));
+                if (data) {
+                    setConfig({
+                        mt5_login: data.mt5_login,
+                        mt5_server: data.mt5_server,
+                        strategy_symbols: data.strategy_symbols,
+                        mt5_password: '', // Never return password via API
+                    });
+                }
                 setAvailableSymbols(symbols);
 
-                if (status && status.account) {
+                if (status) {
                     setTerminalStatus({
-                        algo_trading: status.account.algo_trading_enabled,
-                        trade_allowed: status.account.trade_allowed
+                        algo_trading: status.account?.algo_trading_enabled ?? true,
+                        trade_allowed: status.account?.trade_allowed ?? true,
+                        mt5_connected: status.bot?.mt5_connected ?? false
                     });
                 }
             } catch (err) {
@@ -96,14 +96,9 @@ export default function ConfigPage() {
         setLoading(true);
         try {
             await apiUpdateConfig({
-                mt5_login: config.mt5_login ? parseInt(config.mt5_login) : undefined,
+                mt5_login: config.mt5_login,
                 mt5_password: config.mt5_password || undefined,
                 mt5_server: config.mt5_server || undefined,
-                small_profit_usd: config.small_profit_usd,
-                auto_lot_enabled: config.auto_lot_enabled,
-                risk_multiplier: config.risk_multiplier,
-                max_open_positions: config.max_open_positions,
-                strategy_enabled: config.strategy_enabled,
                 strategy_symbols: config.strategy_symbols,
             });
             alert('Configuration saved to backend');
@@ -122,6 +117,10 @@ export default function ConfigPage() {
         if (currentSymbols.includes(symbol)) {
             newSymbols = currentSymbols.filter(s => s !== symbol);
         } else {
+            if (currentSymbols.length >= 3) {
+                alert('Maximum 3 symbols allowed for optimized scalping.');
+                return;
+            }
             newSymbols = [...currentSymbols, symbol];
         }
         setConfig({ ...config, strategy_symbols: newSymbols.join(', ') });
@@ -134,6 +133,15 @@ export default function ConfigPage() {
     };
 
     const selectedSymbolsList = config.strategy_symbols.split(',').map(s => s.trim()).filter(Boolean);
+
+    // Limit to 3 symbols (safeguard)
+    if (selectedSymbolsList.length > 3) {
+        // This might happen if config is corrupted or manually edited in DB
+        const truncated = selectedSymbolsList.slice(0, 3).join(', ');
+        if (truncated !== config.strategy_symbols) {
+            setConfig({ ...config, strategy_symbols: truncated });
+        }
+    }
 
     // Flatten symbols for searching
     const allSymbolsFlat = Object.entries(availableSymbols).flatMap(([cat, syms]) =>
@@ -171,34 +179,15 @@ export default function ConfigPage() {
                     </div>
 
                     <form onSubmit={handleSaveConfig} className="space-y-6">
-                        {/* Strategy Engine Toggle */}
-                        <div className="flex items-center justify-between p-4 bg-stoic-black/50 rounded-xl border border-white/5">
-                            <div className="flex items-center gap-3 text-gray-300">
-                                <Cpu className={clsx("w-5 h-5", config.strategy_enabled ? "text-stoic-action" : "text-gray-500")} />
-                                <div>
-                                    <p className="text-xs font-bold uppercase tracking-wider">Strategy Engine</p>
-                                    <p className="text-[10px] text-gray-500">Enable automated scalping analysis</p>
-                                </div>
-                            </div>
-                            <button
-                                type="button"
-                                onClick={() => setConfig({ ...config, strategy_enabled: !config.strategy_enabled })}
-                                className={clsx(
-                                    "w-12 h-6 rounded-full relative transition-all duration-300",
-                                    config.strategy_enabled ? "bg-stoic-action shadow-lg shadow-stoic-action/30" : "bg-gray-800"
-                                )}
-                            >
-                                <div className={clsx(
-                                    "w-5 h-5 bg-white rounded-full absolute top-0.5 transition-all duration-300 shadow-md",
-                                    config.strategy_enabled ? "left-6.5" : "left-0.5"
-                                )} />
-                            </button>
-                        </div>
-
                         {/* Watchlist Symbols Dropdown */}
                         <div className="space-y-2">
                             <div className="flex items-center justify-between px-1">
-                                <label className="text-[10px] text-gray-500 uppercase font-bold tracking-widest">Watchlist Symbols</label>
+                                <label className="text-[10px] text-gray-500 uppercase font-bold tracking-widest flex items-center gap-2">
+                                    Watchlist Symbols
+                                    <span className={clsx("px-1.5 py-0.5 rounded text-[8px]", selectedSymbolsList.length >= 3 ? "bg-amber-500/20 text-amber-500" : "bg-stoic-action/20 text-stoic-action")}>
+                                        {selectedSymbolsList.length}/3
+                                    </span>
+                                </label>
                                 <button
                                     type="button"
                                     onClick={(e) => { e.preventDefault(); fetchSymbols(); }}
@@ -272,86 +261,20 @@ export default function ConfigPage() {
                                                     );
                                                 })
                                             ) : (
-                                                <div className="p-8 text-center text-gray-600 text-xs italic">No symbols found matches your search.</div>
+                                                <div className="p-8 text-center space-y-2">
+                                                    <p className="text-gray-500 text-xs italic">
+                                                        {searchQuery ? "No symbols match your search." : "No symbols available."}
+                                                    </p>
+                                                    {!terminalStatus.mt5_connected && !searchQuery && (
+                                                        <p className="text-[10px] text-amber-500/60 leading-tight">
+                                                            Check your MT5 credentials and ensure the terminal is running.
+                                                        </p>
+                                                    )}
+                                                </div>
                                             )}
                                         </div>
                                     </div>
                                 )}
-                            </div>
-                        </div>
-
-                        {/* Risk & Auto-Lot Section */}
-                        <div className="space-y-4 pt-2">
-                            <div className="flex items-center justify-between px-1">
-                                <div className="flex items-center gap-2 text-gray-400">
-                                    <Percent className="w-4 h-4" />
-                                    <span className="text-[10px] uppercase font-bold tracking-widest">Lot Size & Scaling</span>
-                                </div>
-                                <div className="flex items-center gap-2">
-                                    <span className="text-[9px] text-gray-600 uppercase font-black">Auto-Lot</span>
-                                    <button
-                                        type="button"
-                                        onClick={() => setConfig({ ...config, auto_lot_enabled: !config.auto_lot_enabled })}
-                                        className={clsx(
-                                            "w-9 h-4.5 rounded-full relative transition-colors duration-300",
-                                            config.auto_lot_enabled ? "bg-stoic-action/60" : "bg-gray-800"
-                                        )}
-                                    >
-                                        <div className={clsx(
-                                            "w-3.5 h-3.5 bg-white rounded-full absolute top-0.5 transition-all duration-300",
-                                            config.auto_lot_enabled ? "left-5" : "left-0.5"
-                                        )} />
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-2">
-                                    <label className="text-[10px] text-gray-500 uppercase font-bold tracking-wider px-1">
-                                        {config.auto_lot_enabled ? "Risk Multiplier" : "Manual Lot"}
-                                    </label>
-                                    <div className="relative">
-                                        <input
-                                            type="number"
-                                            step="0.001"
-                                            value={config.risk_multiplier}
-                                            onChange={(e) => setConfig({ ...config, risk_multiplier: parseFloat(e.target.value) })}
-                                            className="w-full bg-stoic-black border border-white/10 rounded-xl p-3 text-white text-sm focus:border-stoic-action outline-none transition-all"
-                                        />
-                                        <div className="absolute right-3 top-3.5 text-[10px] text-gray-600 font-bold">LOTS</div>
-                                    </div>
-                                    {config.auto_lot_enabled && (
-                                        <p className="text-[9px] text-gray-600 italic px-1 leading-tight">Lots per $1000 equity (e.g. 0.01 = 0.01 lot @ $1k)</p>
-                                    )}
-                                </div>
-                                <div className="space-y-2">
-                                    <label className="text-[10px] text-gray-500 uppercase font-bold tracking-wider px-1">Small Profit ($)</label>
-                                    <div className="relative">
-                                        <input
-                                            type="number"
-                                            step="0.1"
-                                            value={config.small_profit_usd}
-                                            onChange={(e) => setConfig({ ...config, small_profit_usd: parseFloat(e.target.value) })}
-                                            className="w-full bg-stoic-black border border-white/10 rounded-xl p-3 text-white text-sm focus:border-stoic-action outline-none transition-all"
-                                        />
-                                        <div className="absolute right-3 top-3.5 text-[10px] text-gray-600 font-bold">USD</div>
-                                    </div>
-                                    <p className="text-[9px] text-gray-600 italic px-1 leading-tight">Close all positions when combined P&L hits this.</p>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div className="space-y-2">
-                            <label className="text-[10px] text-gray-500 uppercase font-bold tracking-widest px-1">Account Safeguards</label>
-                            <div className="relative">
-                                <input
-                                    type="number"
-                                    value={config.max_open_positions}
-                                    onChange={(e) => setConfig({ ...config, max_open_positions: parseInt(e.target.value) })}
-                                    className="w-full bg-stoic-black border border-white/10 rounded-xl p-3 text-white text-sm focus:border-stoic-action outline-none transition-all"
-                                />
-                                <ShieldAlert className="absolute right-3 top-3.5 w-4 h-4 text-gray-600" />
-                                <div className="absolute right-9 top-3.5 text-[10px] text-gray-600 font-bold uppercase tracking-tighter">Max Positions</div>
                             </div>
                         </div>
 
@@ -362,8 +285,8 @@ export default function ConfigPage() {
                                 <input
                                     type="text"
                                     placeholder="Broker Login ID"
-                                    value={config.mt5_login}
-                                    onChange={(e) => setConfig({ ...config, mt5_login: e.target.value })}
+                                    value={config.mt5_login === 0 ? '' : config.mt5_login}
+                                    onChange={(e) => setConfig({ ...config, mt5_login: parseInt(e.target.value) || 0 })}
                                     className="w-full bg-stoic-black border border-white/10 rounded-xl p-3 text-white text-sm focus:border-stoic-action outline-none"
                                 />
                                 <div className="relative">

@@ -2,16 +2,15 @@
 
 import React, { useState } from 'react';
 import { useRealtime } from '@/hooks/useRealtime';
-import { startBot, stopBot, getStatus } from '@/lib/api-client';
-import { Power, DollarSign } from 'lucide-react';
+import { startBot, stopBot, getStatus, closeAll } from '@/lib/api-client';
+import { Power, DollarSign, ShieldAlert } from 'lucide-react';
 import { PageContainer } from './PageContainer';
 import clsx from 'clsx';
 
 export default function Dashboard() {
-    const { botStatus, openPL } = useRealtime();
+    const { botStatus, openPL, positionCount } = useRealtime();
     const [isActive, setIsActive] = useState(false);
     const [loading, setLoading] = useState(false);
-    const [positionCount, setPositionCount] = useState(0);
 
     // Initial and periodic status sync is handled by PageContainer, 
     // but we can also use useRealtime for some data.
@@ -38,17 +37,23 @@ export default function Dashboard() {
         setLoading(false);
     };
 
-    // React to botStatus changes from realtime
-    React.useEffect(() => {
-        if (botStatus) {
-            setIsActive(botStatus.is_active);
+    const handleCloseAll = async () => {
+        if (!confirm('Are you sure you want to close ALL open positions immediately?')) return;
+        setLoading(true);
+        try {
+            await closeAll();
+            alert('Emergency Close-All triggered successfully.');
+        } catch (err) {
+            console.error('Close all error:', err);
+            alert('Failed to trigger emergency close');
         }
-    }, [botStatus]);
+        setLoading(false);
+    };
 
-    // Fetch initial position count once
+    // Fetch initial status via API for reliability on load
     React.useEffect(() => {
-        getStatus().then(status => setPositionCount(status.position_count)).catch(console.error);
-    }, []);
+        setIsActive(botStatus?.is_active ?? false);
+    }, [botStatus]);
 
     return (
         <PageContainer>
@@ -58,7 +63,15 @@ export default function Dashboard() {
                     <DollarSign className="w-12 h-12 text-white/5" />
                 </div>
                 <div className="flex justify-between items-center mb-1">
-                    <p className="text-gray-400 text-sm font-medium uppercase tracking-widest">Open P/L</p>
+                    <div className="flex items-center gap-2">
+                        <p className="text-gray-400 text-sm font-medium uppercase tracking-widest">Open P/L</p>
+                        {isActive && (
+                            <div className="flex items-center gap-1.5 px-2 py-0.5 bg-stoic-action/10 rounded-full border border-stoic-action/20">
+                                <div className="w-1.5 h-1.5 bg-stoic-action rounded-full animate-pulse shadow-[0_0_8px_rgba(0,255,65,0.8)]" />
+                                <span className="text-[9px] text-stoic-action font-black uppercase tracking-tighter">Live</span>
+                            </div>
+                        )}
+                    </div>
                     <span className="text-xs text-gray-500 tabular-nums">{positionCount} active</span>
                 </div>
                 <div className="flex items-baseline gap-1">
@@ -97,6 +110,18 @@ export default function Dashboard() {
                     {loading ? 'Processing...' : (isActive ? 'Stop Station' : 'Start Station')}
                 </div>
             </button>
+
+            {/* Panic Button */}
+            {positionCount > 0 && (
+                <button
+                    onClick={handleCloseAll}
+                    disabled={loading}
+                    className="w-full py-4 rounded-xl font-black text-xs uppercase tracking-[0.2em] border border-stoic-danger/30 text-stoic-danger bg-stoic-danger/5 hover:bg-stoic-danger/10 transition-all flex items-center justify-center gap-2 animate-in fade-in slide-in-from-bottom-2 duration-500"
+                >
+                    <ShieldAlert className="w-4 h-4" />
+                    Emergency Close All
+                </button>
+            )}
         </PageContainer>
     );
 }

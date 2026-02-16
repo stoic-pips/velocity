@@ -7,6 +7,8 @@ export interface BotStatus {
     running?: boolean;
     status_message: string;
     last_updated: string;
+    open_pl?: number;
+    position_count?: number;
 }
 
 export interface Position {
@@ -20,6 +22,7 @@ export const useRealtime = () => {
     const [botStatus, setBotStatus] = useState<BotStatus | null>(null);
     const [positions, setPositions] = useState<Position[]>([]);
     const [openPL, setOpenPL] = useState<number>(0);
+    const [positionCount, setPositionCount] = useState<number>(0);
 
     useEffect(() => {
         // Initial fetch
@@ -34,6 +37,8 @@ export const useRealtime = () => {
                     ...status,
                     is_active: status.running ?? status.is_active ?? false
                 });
+                if (status.open_pl !== undefined) setOpenPL(status.open_pl);
+                if (status.position_count !== undefined) setPositionCount(status.position_count);
             }
 
             const { data: positionsData } = await supabase
@@ -60,6 +65,8 @@ export const useRealtime = () => {
                         ...status,
                         is_active: status.running ?? status.is_active ?? false
                     });
+                    if (status.open_pl !== undefined) setOpenPL(status.open_pl);
+                    if (status.position_count !== undefined) setPositionCount(status.position_count);
                 }
             )
             .on(
@@ -78,5 +85,5 @@ export const useRealtime = () => {
         };
     }, []);
 
-    return { botStatus, positions, openPL };
+    return { botStatus, positions, openPL, positionCount };
 };

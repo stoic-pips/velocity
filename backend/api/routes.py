@@ -143,7 +143,7 @@ async def close_all_orders() -> dict:
 @router.post("/small-profit")
 async def check_small_profit(body: SmallProfitRequest) -> dict:
     """Manually trigger a small-profit check."""
-    return _scalper.check_small_profit(threshold_usd=body.threshold)
+    return _scalper.check_risk_parameters()
 
 
 # ── Configuration ───────────────────────────────────────────────────────────
@@ -152,11 +152,6 @@ class ConfigUpdateRequest(BaseModel):
     mt5_login: Optional[int] = None
     mt5_password: Optional[str] = None
     mt5_server: Optional[str] = None
-    small_profit_usd: Optional[float] = None
-    auto_lot_enabled: Optional[bool] = None
-    risk_multiplier: Optional[float] = None
-    max_open_positions: Optional[int] = None
-    strategy_enabled: Optional[bool] = None
     strategy_symbols: Optional[str] = None
 
 
@@ -167,11 +162,6 @@ async def get_config() -> dict:
     return {
         "mt5_login": settings.mt5_login,
         "mt5_server": settings.mt5_server,
-        "small_profit_usd": settings.small_profit_usd,
-        "auto_lot_enabled": settings.auto_lot_enabled,
-        "risk_multiplier": settings.risk_multiplier,
-        "max_open_positions": settings.max_open_positions,
-        "strategy_enabled": settings.strategy_enabled,
         "strategy_symbols": settings.strategy_symbols,
     }
 
@@ -195,16 +185,6 @@ async def update_config(body: ConfigUpdateRequest) -> dict:
         updates["MT5_PASSWORD"] = body.mt5_password
     if body.mt5_server is not None:
         updates["MT5_SERVER"] = body.mt5_server
-    if body.small_profit_usd is not None:
-        updates["SMALL_PROFIT_USD"] = str(body.small_profit_usd)
-    if body.auto_lot_enabled is not None:
-        updates["AUTO_LOT_ENABLED"] = str(body.auto_lot_enabled).lower()
-    if body.risk_multiplier is not None:
-        updates["RISK_MULTIPLIER"] = str(body.risk_multiplier)
-    if body.max_open_positions is not None:
-        updates["MAX_OPEN_POSITIONS"] = str(body.max_open_positions)
-    if body.strategy_enabled is not None:
-        updates["STRATEGY_ENABLED"] = str(body.strategy_enabled).lower()
     if body.strategy_symbols is not None:
         updates["STRATEGY_SYMBOLS"] = body.strategy_symbols
 
@@ -237,6 +217,12 @@ async def update_config(body: ConfigUpdateRequest) -> dict:
     # Set environment variables for the current process too
     for key, value in updates.items():
         os.environ[key] = value
+
+    # If credentials changed, attempt to reconnect MT5
+    if any(k in updates for k in ["MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER", "MT5_PATH"]):
+        print("[API] MT5 Credentials updated. Attempting reconnection...")
+        _mt5.disconnect()
+        _mt5.connect()
 
     # Sync to Supabase for Strategy Engine
     new_settings = get_settings() # Reload settings with new values

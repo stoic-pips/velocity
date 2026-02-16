@@ -66,14 +66,22 @@ class ScalperEngine:
         self._supabase.push_bot_status({"running": False})
         print("[Scalper] Engine stopped.")
 
-    def check_small_profit(self, threshold_usd: Optional[float] = None, positions: Optional[list[dict]] = None) -> dict:
+    def check_risk_parameters(self, positions: Optional[list[dict]] = None) -> dict:
         """
-        Check if total floating P&L ≥ threshold.
-        If so, close all positions and return the result.
+        Check if total floating P&L exceeds Small Profit or Max Loss thresholds.
+        Max Loss is calculated as a percentage of account equity.
         """
         settings = get_settings()
-        if threshold_usd is None:
-            threshold_usd = settings.small_profit_usd
+        threshold_profit = settings.small_profit_usd
+        
+        # Get account info for equity-based loss calculation
+        account = self._mt5.get_account_info()
+        if not account:
+            return {"triggered": False, "total_profit": 0.0, "message": "MT5 not connected"}
+            
+        equity = account.get("equity", 0.0)
+        # Calculate dynamic USD threshold (e.g. 10% of $10 = $1 loss allowed)
+        threshold_loss_usd = -(equity * (settings.max_loss_percent / 100.0))
 
         if positions is None:
             positions = self._mt5.get_positions()
@@ -82,35 +90,49 @@ class ScalperEngine:
             return {
                 "triggered": False,
                 "total_profit": 0.0,
-                "threshold": threshold_usd,
                 "message": "No open positions",
             }
 
         total_profit: float = sum(p["profit"] for p in positions)
 
-        if total_profit >= threshold_usd:
+        # 🎯 Case 1: Small Profit reached
+        if total_profit >= threshold_profit:
             close_result = self._mt5.close_all_orders()
-
-            # Log each closed trade to Supabase
             self._supabase.push_trade({
                 "action": "small_profit_close",
                 "profit": round(total_profit, 2),
-                "threshold": threshold_usd,
+                "threshold": threshold_profit,
                 "positions_closed": close_result.get("closed", 0),
             })
-
             return {
                 "triggered": True,
+                "reason": "small_profit",
                 "total_profit": round(total_profit, 2),
-                "threshold": threshold_usd,
+                "close_result": close_result,
+            }
+
+        # 🛡️ Case 2: Maximum Loss reached (Equity % Circuit Breaker)
+        if total_profit <= threshold_loss_usd:
+            close_result = self._mt5.close_all_orders()
+            self._supabase.push_trade({
+                "action": "max_loss_circuit_breaker",
+                "profit": round(total_profit, 2),
+                "threshold": round(threshold_loss_usd, 2),
+                "percent": settings.max_loss_percent,
+                "positions_closed": close_result.get("closed", 0),
+            })
+            print(f"[Scalper] 🛡️ CIRCUIT BREAKER: {settings.max_loss_percent}% Loss hit (${total_profit:.2f} <= ${threshold_loss_usd:.2f})")
+            return {
+                "triggered": True,
+                "reason": "max_loss",
+                "total_profit": round(total_profit, 2),
                 "close_result": close_result,
             }
 
         return {
             "triggered": False,
             "total_profit": round(total_profit, 2),
-            "threshold": threshold_usd,
-            "message": f"Profit {total_profit:.2f} < threshold {threshold_usd:.2f}",
+            "message": f"P&L {total_profit:.2f} within bounds ({threshold_loss_usd:.2f} to {threshold_profit:.2f})",
         }
 
     # ── Internal Loop ───────────────────────────────────────────────────────
@@ -129,8 +151,18 @@ class ScalperEngine:
                 positions = self._mt5.get_positions()
                 self._supabase.sync_positions(positions)
 
-                # 2. Check logic
-                result = self.check_small_profit(positions=positions)
+                # 2. Check logic and prepare heartbeat data
+                total_profit = sum(p["profit"] for p in positions) if positions else 0.0
+                position_count = len(positions) if positions else 0
+
+                # Periodic heartbeat to status table for dashboard
+                self._supabase.push_bot_status({
+                    "running": True,
+                    "open_pl": round(total_profit, 2),
+                    "position_count": position_count
+                })
+
+                result = self.check_risk_parameters(positions=positions)
 
                 if result["triggered"]:
                     print(
@@ -151,6 +183,8 @@ class ScalperEngine:
             except Exception as exc:
                 print(f"[Scalper] Error in loop: {exc}")
 
-            self._stop_event.wait(settings.profit_check_interval)
+            # Always fetch latest settings for the wait interval
+            current_settings = get_settings()
+            self._stop_event.wait(current_settings.profit_check_interval)
 
         print("[Scalper] Monitor loop exited.")
