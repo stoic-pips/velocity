@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useRealtime } from '@/hooks/useRealtime';
 import { supabase } from '@/lib/supabase';
-import { Activity, Power, Settings, ShieldAlert, DollarSign, TrendingUp, LogOut } from 'lucide-react';
+import { getStatus, startBot, stopBot } from '@/lib/api-client';
+import { Activity, Power, Settings, ShieldAlert, DollarSign, TrendingUp, LogOut, Wifi, WifiOff } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import clsx from 'clsx';
 
@@ -11,6 +12,8 @@ export default function Dashboard() {
     const router = useRouter();
     const { botStatus, openPL } = useRealtime();
     const [isActive, setIsActive] = useState(false);
+    const [mt5Connected, setMt5Connected] = useState(false);
+    const [positionCount, setPositionCount] = useState(0);
     const [config, setConfig] = useState({
         small_profit_usd: 2.0,
         max_lot_size: 1.0,
@@ -21,33 +24,59 @@ export default function Dashboard() {
     });
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
+    const [statusError, setStatusError] = useState<string | null>(null);
+
+    // Poll backend status
+    const fetchBackendStatus = useCallback(async () => {
+        try {
+            const status = await getStatus();
+            setIsActive(status.bot.running);
+            setMt5Connected(status.bot.mt5_connected);
+            setPositionCount(status.position_count);
+            setStatusError(null);
+        } catch (err) {
+            setStatusError('Backend offline');
+            console.error('Backend status error:', err);
+        }
+    }, []);
 
     useEffect(() => {
+        // Fetch backend status on mount + every 5 seconds
+        fetchBackendStatus();
+        const interval = setInterval(fetchBackendStatus, 5000);
+
+        // Also sync Supabase realtime status
         if (botStatus) {
             setIsActive(botStatus.is_active);
         }
+
+        // Fetch config from Supabase
         const fetchConfig = async () => {
             const { data } = await supabase.from('bot_config').select('*').single();
             if (data) setConfig(data);
         };
         fetchConfig();
-    }, [botStatus]);
+
+        return () => clearInterval(interval);
+    }, [botStatus, fetchBackendStatus]);
 
     const toggleBot = async () => {
         setLoading(true);
-        const newState = !isActive;
-        setIsActive(newState); // Optimistic update
-
-        // Call backend API or update Supabase directly if RPC/RLS allows. 
-        // Assuming direct update for now as requested "Server Actions" usually implies DB update.
-        const { error } = await supabase
-            .from('bot_status')
-            .update({ is_active: newState })
-            .eq('id', 1);
-
-        if (error) {
-            console.error('Error toggling bot:', error);
-            setIsActive(!newState); // Revert
+        try {
+            if (isActive) {
+                const res = await stopBot();
+                setIsActive(res.running);
+            } else {
+                const res = await startBot();
+                if (res.error) {
+                    alert(`Failed to start: ${res.error}`);
+                } else {
+                    setIsActive(res.running);
+                }
+            }
+        } catch (err) {
+            console.error('Toggle bot error:', err);
+            alert('Failed to reach backend API');
         }
         setLoading(false);
     };
@@ -85,7 +114,15 @@ export default function Dashboard() {
                     <TrendingUp className="text-stoic-action w-6 h-6" />
                     VELOCITY
                 </h1>
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-3">
+                    {/* MT5 Connection Indicator */}
+                    <div className={clsx(
+                        "p-1.5 rounded-lg border",
+                        mt5Connected ? "border-stoic-action/30 text-stoic-action" : "border-red-500/30 text-red-400"
+                    )} title={mt5Connected ? 'MT5 Connected' : 'MT5 Disconnected'}>
+                        {mt5Connected ? <Wifi className="w-4 h-4" /> : <WifiOff className="w-4 h-4" />}
+                    </div>
+                    {/* Bot Status Badge */}
                     <div className={clsx(
                         "px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-2",
                         isActive ? "bg-stoic-action/20 text-stoic-action border border-stoic-action/50" : "bg-stoic-gray text-gray-400 border border-white/10"
@@ -93,6 +130,7 @@ export default function Dashboard() {
                         <div className={clsx("w-2 h-2 rounded-full", isActive ? "bg-stoic-action animate-pulse" : "bg-gray-500")} />
                         {isActive ? 'Active' : 'Standby'}
                     </div>
+                    {/* Logout */}
                     <button
                         onClick={handleLogout}
                         disabled={loading}
@@ -105,12 +143,23 @@ export default function Dashboard() {
             </header>
 
             <main className="space-y-6 max-w-md mx-auto">
+                {/* Backend Status Banner */}
+                {statusError && (
+                    <div className="bg-red-500/10 border border-red-500/30 rounded-xl px-4 py-3 text-red-400 text-sm font-medium flex items-center gap-2">
+                        <WifiOff className="w-4 h-4 shrink-0" />
+                        {statusError} — Bot controls disabled
+                    </div>
+                )}
+
                 {/* Core Component 1: Live Profit Card */}
                 <div className="bg-stoic-charcoal border border-white/5 rounded-2xl p-6 relative overflow-hidden group">
                     <div className="absolute top-0 right-0 p-4 opacity-50">
                         <DollarSign className="w-12 h-12 text-white/5" />
                     </div>
-                    <p className="text-gray-400 text-sm font-medium uppercase tracking-widest mb-1">Open P/L</p>
+                    <div className="flex justify-between items-center mb-1">
+                        <p className="text-gray-400 text-sm font-medium uppercase tracking-widest">Open P/L</p>
+                        <span className="text-xs text-gray-500 tabular-nums">{positionCount} position{positionCount !== 1 ? 's' : ''}</span>
+                    </div>
                     <div className="flex items-baseline gap-1">
                         <span className={clsx(
                             "text-5xl font-bold tracking-tighter tabular-nums transition-colors duration-500",

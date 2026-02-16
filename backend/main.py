@@ -9,6 +9,7 @@ from typing import AsyncGenerator
 
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import router, _mt5, _scalper
 from config.settings import get_settings
@@ -51,6 +52,19 @@ app = FastAPI(
     description="MT5 Scalping Bot REST API",
     version="2.0.0",
     lifespan=lifespan,
+)
+
+# ── CORS ────────────────────────────────────────────────────────────────────
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(router)
