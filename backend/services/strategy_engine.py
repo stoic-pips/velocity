@@ -112,7 +112,18 @@ class StrategyEngine:
         # Verify symbol exists
         tick = self._mt5.get_tick(symbol)
         if not tick:
-            return
+            # Try selecting the symbol if not available
+            if mt5.symbol_select(symbol, True):
+                # Small delay to allow tick data to arrive? 
+                # Better to just return and let next cycle handle it, 
+                # or do a short sleep. Strategy loop has its own sleep.
+                # Let's retry immediately once.
+                import time
+                time.sleep(0.1)
+                tick = self._mt5.get_tick(symbol)
+            
+            if not tick:
+                return
 
         # copy_rates_from_pos(symbol, timeframe, start_pos, count)
         rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
@@ -140,29 +151,22 @@ class StrategyEngine:
         vol_check = self.check_volatility(symbol, df)
         if not vol_check['allowed']:
             if vol_check.get('status') == 'Market Sleep':
-                self._supabase.push_bot_status({"status_message": "Market Sleep: Low Volatility"})
+                pass # Reduce noise
+                # self._supabase.push_bot_status({"status_message": "Market Sleep: Low Volatility"})
             return
 
         # Adaptive Profit Logic
         if vol_check.get('extreme'):
-            # Temporary override of small_profit_usd for this cycle? 
-            # Or just pass it to the scalper? 
-            # The user says "automatically double the SMALL_PROFIT_USD target".
-            # We can update the settings for the whole cycle or just for these positions.
-            # Easiest: patch the env/settings temporarily or just log it.
-            # Let's use a more robust way: ScalperEngine reads settings.
-            # If we double it here, it might not affect already open positions unless we change the global setting.
-            # The prompt says "automatically double the SMALL_PROFIT_USD target to capture the larger move".
-            # I'll update the settings temporarily (in-memory) if extreme is detected.
-            settings.small_profit_usd *= 2.0
-            print(f"[Strategy] ⚡ EXTREME VOLATILITY DETECTED. Doubling profit target to ${settings.small_profit_usd}")
+            # settings.small_profit_usd *= 2.0  <-- Removed to prevent runaway growth
+            print(f"[Strategy] ⚡ EXTREME VOLATILITY DETECTED on {symbol}. Suggest manual profit target adjustment.")
 
         close = target_candle['close']
         sma = target_candle['SMA_10']
         rsi = target_candle['RSI_14']
         
-        # Verbose Logging for debugging
-        if int(time.time()) % 10 == 0: # Log every 10s approximately per symbol to avoid spam
+        # Verbose Logging for debugging (every ~60s per symbol)
+        # Using timestamp to throttle
+        if int(time.time()) % 60 == 0: 
             print(f"[Strategy] {symbol} Scan: Close={close:.5f}, SMA={sma:.5f}, RSI={rsi:.1f}")
 
         signal = None
@@ -190,9 +194,6 @@ class StrategyEngine:
                 print(f"[Strategy] Trade Executed: {res['ticket']}")
                 # Mark this candle as traded
                 self._last_trade_candles[symbol] = current_candle_time
-                
-                # Push trade intent to Supabase? (Already handled by close logic later, but maybe open too?)
-                # Not currently required by user.
             else:
                 print(f"[Strategy] Trade Failed: {res.get('error')}")
 
@@ -205,8 +206,6 @@ class StrategyEngine:
         settings = get_settings()
         
         if not settings.auto_lot_enabled:
-            # Fallback to a safe minimum if auto-lot is off but we still need a value
-            # Since we removed max_lot_size, we might want a 'manual_lot' or just default to 0.01
             return 0.01
 
         account = self._mt5.get_account_info()
@@ -220,7 +219,6 @@ class StrategyEngine:
         lot = (equity / 1000.0) * multiplier
         
         # Clamp to broker standards (minimum 0.01 usually)
-        # We can try to get symbol info for min_lot
         import MetaTrader5 as mt5
         sym_info = mt5.symbol_info(symbol)
         if sym_info:
@@ -229,7 +227,8 @@ class StrategyEngine:
             step = sym_info.volume_step
             
             # Align with step
-            lot = round(lot / step) * step
+            if step > 0:
+                lot = round(lot / step) * step
             lot = max(min_lot, min(max_lot, lot))
         else:
             lot = max(0.01, round(lot, 2))
@@ -241,7 +240,7 @@ class StrategyEngine:
         Senior Quant Volatility Filter:
         1. ATR Threshold: Current ATR > MIN_ATR_THRESHOLD.
         2. RVI/Expansion: Current volatility > Avg(last 20).
-        3. Spread Protection: Spread < 30% of target profit.
+        3. Spread Protection: Spread cost < 30% of target profit.
         """
         settings = get_settings()
         if not settings.volatility_filter_enabled:
@@ -260,21 +259,26 @@ class StrategyEngine:
             return {'allowed': False, 'status': 'Wait', 'reason': 'Volatility contracting'}
 
         # 3. Spread Protection
-        tick = self._mt5.get_tick(symbol)
-        if tick:
-            spread = tick.ask - tick.bid
-            # Target profit is in USD, spread is in price points.
-            # We need to convert spread to USD for a valid comparison.
-            # Approx: SpreadUSD = Spread * Lot * TickValue / TickSize
-            # But simpler: If spreadPoints > 30% of target points?
-            # User says "If spread is > 30% of the target profit (SMALL_PROFIT_USD)".
-            # This is tricky because profit is aggregate. 
-            # Let's assume a standard 0.01 lot for the check.
-            target_usd = settings.small_profit_usd
-            if spread > (target_usd * 0.3): # Naive check, assuming 1 point ~ 1 USD for simplicity or scaling needed
-                # Realistically we should use point value.
-                # If spread is 30% of the goal, it's too expensive.
-                return {'allowed': False, 'status': 'Wait', 'reason': 'Spread too wide'}
+        # tick = self._mt5.get_tick(symbol) # Already have tick if we are here? 
+        # scan_market calls get_tick but doesn't pass it. Let's fetch info.
+        info = mt5.symbol_info(symbol)
+        tick = mt5.symbol_info_tick(symbol)
+        
+        if info and tick:
+            spread_points = tick.ask - tick.bid
+            
+            # Calculate spread cost in USD for 0.01 lot (or min volume)
+            # Cost = (SpreadPoints / Point) * TickValue * Volume
+            # If Point is 0 or TickValue is 0, skip check
+            if info.point > 0 and info.trade_tick_value > 0:
+                vol_min = info.volume_min if info.volume_min > 0 else 0.01
+                spread_cost = (spread_points / info.point) * info.trade_tick_value * vol_min
+                
+                target_usd = settings.small_profit_usd
+                
+                if spread_cost > (target_usd * 0.3):
+                    # print(f"[Strategy] {symbol} Spread Block: Cost ${spread_cost:.4f} > Limit ${target_usd * 0.3:.4f}")
+                    return {'allowed': False, 'status': 'Wait', 'reason': 'Spread too expensive'}
 
         # 4. Adaptive Logic (Extreme)
         is_extreme = current_atr > (settings.min_atr_threshold * settings.extreme_vol_threshold)

@@ -5,6 +5,7 @@ export interface BotStatus {
     id: number;
     is_active?: boolean;
     running?: boolean;
+    is_running?: boolean; // Add this
     status_message: string;
     last_updated: string;
     open_pl?: number;
@@ -35,7 +36,8 @@ export const useRealtime = () => {
                 const status = statusData as BotStatus;
                 setBotStatus({
                     ...status,
-                    is_active: status.running ?? status.is_active ?? false
+                    // Check schema column 'is_running' first, then legacy 'running'/'is_active'
+                    is_active: status.is_running ?? status.running ?? status.is_active ?? false
                 });
                 if (status.open_pl !== undefined) setOpenPL(status.open_pl);
                 if (status.position_count !== undefined) setPositionCount(status.position_count);
@@ -63,7 +65,7 @@ export const useRealtime = () => {
                     const status = payload.new as BotStatus;
                     setBotStatus({
                         ...status,
-                        is_active: status.running ?? status.is_active ?? false
+                        is_active: status.is_running ?? status.running ?? status.is_active ?? false
                     });
                     if (status.open_pl !== undefined) setOpenPL(status.open_pl);
                     if (status.position_count !== undefined) setPositionCount(status.position_count);
