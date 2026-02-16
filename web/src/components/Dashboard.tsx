@@ -3,10 +3,12 @@
 import React, { useEffect, useState } from 'react';
 import { useRealtime } from '@/hooks/useRealtime';
 import { supabase } from '@/lib/supabase';
-import { Activity, Power, Settings, ShieldAlert, DollarSign, TrendingUp } from 'lucide-react';
+import { Activity, Power, Settings, ShieldAlert, DollarSign, TrendingUp, LogOut } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 import clsx from 'clsx';
 
 export default function Dashboard() {
+    const router = useRouter();
     const { botStatus, openPL } = useRealtime();
     const [isActive, setIsActive] = useState(false);
     const [config, setConfig] = useState({
@@ -63,6 +65,18 @@ export default function Dashboard() {
         setLoading(false);
     };
 
+    const handleLogout = async () => {
+        setLoading(true);
+        const { error } = await supabase.auth.signOut();
+        if (error) {
+            console.error('Error logging out:', error);
+            setLoading(false);
+        } else {
+            router.push('/login');
+            router.refresh();
+        }
+    };
+
     return (
         <div className="min-h-screen bg-stoic-black text-white p-4 pb-20 font-sans selection:bg-stoic-action selection:text-black">
             {/* Header */}
@@ -71,12 +85,22 @@ export default function Dashboard() {
                     <TrendingUp className="text-stoic-action w-6 h-6" />
                     VELOCITY
                 </h1>
-                <div className={clsx(
-                    "px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-2",
-                    isActive ? "bg-stoic-action/20 text-stoic-action border border-stoic-action/50" : "bg-stoic-gray text-gray-400 border border-white/10"
-                )}>
-                    <div className={clsx("w-2 h-2 rounded-full", isActive ? "bg-stoic-action animate-pulse" : "bg-gray-500")} />
-                    {isActive ? 'Active' : 'Standby'}
+                <div className="flex items-center gap-4">
+                    <div className={clsx(
+                        "px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider flex items-center gap-2",
+                        isActive ? "bg-stoic-action/20 text-stoic-action border border-stoic-action/50" : "bg-stoic-gray text-gray-400 border border-white/10"
+                    )}>
+                        <div className={clsx("w-2 h-2 rounded-full", isActive ? "bg-stoic-action animate-pulse" : "bg-gray-500")} />
+                        {isActive ? 'Active' : 'Standby'}
+                    </div>
+                    <button
+                        onClick={handleLogout}
+                        disabled={loading}
+                        className="p-2 rounded-lg bg-stoic-gray border border-white/5 text-gray-400 hover:text-white hover:bg-stoic-gray/80 transition-all active:scale-95"
+                        title="Sign Out"
+                    >
+                        <LogOut className="w-5 h-5" />
+                    </button>
                 </div>
             </header>
 
