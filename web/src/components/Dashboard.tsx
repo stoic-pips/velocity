@@ -3,7 +3,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useRealtime } from '@/hooks/useRealtime';
 import { supabase } from '@/lib/supabase';
-import { getStatus, startBot, stopBot } from '@/lib/api-client';
+import { getStatus, startBot, stopBot, getConfig, updateConfig as apiUpdateConfig, openOrder } from '@/lib/api-client';
 import { Activity, Power, Settings, ShieldAlert, DollarSign, TrendingUp, LogOut, Wifi, WifiOff } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import clsx from 'clsx';
@@ -25,6 +25,8 @@ export default function Dashboard() {
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [statusError, setStatusError] = useState<string | null>(null);
+    const [manualSymbol, setManualSymbol] = useState('EURUSD');
+    const [manualLot, setManualLot] = useState(0.01);
 
     // Poll backend status
     const fetchBackendStatus = useCallback(async () => {
@@ -50,10 +52,21 @@ export default function Dashboard() {
             setIsActive(botStatus.is_active);
         }
 
-        // Fetch config from Supabase
+        // Fetch config from backend API
         const fetchConfig = async () => {
-            const { data } = await supabase.from('bot_config').select('*').single();
-            if (data) setConfig(data);
+            try {
+                const cfg = await getConfig();
+                setConfig(c => ({
+                    ...c,
+                    mt5_login: String(cfg.mt5_login || ''),
+                    mt5_server: cfg.mt5_server || '',
+                    small_profit_usd: cfg.small_profit_usd,
+                    max_lot_size: cfg.max_lot_size,
+                    max_open_positions: cfg.max_open_positions,
+                }));
+            } catch (err) {
+                console.error('Failed to fetch config:', err);
+            }
         };
         fetchConfig();
 
@@ -81,16 +94,40 @@ export default function Dashboard() {
         setLoading(false);
     };
 
-    const updateConfig = async (e: React.FormEvent) => {
+    const handleSaveConfig = async (e: React.FormEvent) => {
         e.preventDefault();
         setLoading(true);
-        const { error } = await supabase
-            .from('bot_config')
-            .update(config)
-            .eq('id', 1);
+        try {
+            await apiUpdateConfig({
+                mt5_login: config.mt5_login ? parseInt(config.mt5_login) : undefined,
+                mt5_password: config.mt5_password || undefined,
+                mt5_server: config.mt5_server || undefined,
+                small_profit_usd: config.small_profit_usd,
+                max_lot_size: config.max_lot_size,
+                max_open_positions: config.max_open_positions,
+            });
+            alert('Configuration saved to backend');
+        } catch (err) {
+            console.error('Config update error:', err);
+            alert('Failed to update config');
+        }
+        setLoading(false);
+    };
 
-        if (error) alert('Failed to update config');
-        else alert('Config updated successfully');
+    const handleOpenOrder = async (direction: 'BUY' | 'SELL') => {
+        setLoading(true);
+        try {
+            await openOrder({
+                symbol: manualSymbol,
+                lot: manualLot,
+                direction,
+            });
+            alert(`${direction} order opened for ${manualSymbol}`);
+            fetchBackendStatus();
+        } catch (err: any) {
+            console.error('Order error:', err);
+            alert(`Failed to open order: ${err.message}`);
+        }
         setLoading(false);
     };
 
@@ -197,6 +234,52 @@ export default function Dashboard() {
                     </div>
                 </button>
 
+                {/* Core Component 3: Manual Trade Controls */}
+                <div className="bg-stoic-charcoal border border-white/5 rounded-2xl p-6">
+                    <div className="flex items-center gap-2 mb-4 text-gray-300">
+                        <Activity className="w-5 h-5" />
+                        <h2 className="font-semibold tracking-wide">Manual Override</h2>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                        <div className="space-y-1">
+                            <label className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Symbol</label>
+                            <input
+                                type="text"
+                                value={manualSymbol}
+                                onChange={(e) => setManualSymbol(e.target.value)}
+                                className="w-full bg-stoic-black border border-white/10 rounded-lg p-3 text-white text-sm focus:border-stoic-action outline-none group-hover:border-white/20"
+                                placeholder="e.g. EURUSD"
+                            />
+                        </div>
+                        <div className="space-y-1">
+                            <label className="text-[10px] text-gray-500 uppercase font-bold tracking-wider">Lots</label>
+                            <input
+                                type="number"
+                                step="0.01"
+                                value={manualLot}
+                                onChange={(e) => setManualLot(parseFloat(e.target.value))}
+                                className="w-full bg-stoic-black border border-white/10 rounded-lg p-3 text-white text-sm focus:border-stoic-action outline-none"
+                            />
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <button
+                            onClick={() => handleOpenOrder('BUY')}
+                            disabled={loading || !mt5Connected}
+                            className="py-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-bold hover:bg-emerald-500/20 active:scale-95 transition-all text-sm uppercase tracking-wider"
+                        >
+                            Buy
+                        </button>
+                        <button
+                            onClick={() => handleOpenOrder('SELL')}
+                            disabled={loading || !mt5Connected}
+                            className="py-3 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400 font-bold hover:bg-rose-500/20 active:scale-95 transition-all text-sm uppercase tracking-wider"
+                        >
+                            Sell
+                        </button>
+                    </div>
+                </div>
+
                 {/* Core Component 3: Risk Config Form */}
                 <div className="bg-stoic-charcoal border border-white/5 rounded-2xl p-6">
                     <div className="flex items-center gap-2 mb-6 text-gray-300">
@@ -204,7 +287,7 @@ export default function Dashboard() {
                         <h2 className="font-semibold tracking-wide">Risk Configuration</h2>
                     </div>
 
-                    <form onSubmit={updateConfig} className="space-y-5">
+                    <form onSubmit={handleSaveConfig} className="space-y-5">
                         <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-2">
                                 <label className="text-xs text-gray-500 uppercase font-bold tracking-wider">Small Profit ($)</label>
@@ -267,6 +350,13 @@ export default function Dashboard() {
                                         {showPassword ? 'Hide' : 'Show'}
                                     </button>
                                 </div>
+                                <input
+                                    type="text"
+                                    placeholder="Broker Server (e.g. Deriv-Demo)"
+                                    value={config.mt5_server}
+                                    onChange={(e) => setConfig({ ...config, mt5_server: e.target.value })}
+                                    className="w-full bg-stoic-black border border-white/10 rounded-lg p-3 text-white text-sm focus:border-stoic-action outline-none"
+                                />
                             </div>
                         </div>
 

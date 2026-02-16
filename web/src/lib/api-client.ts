@@ -73,3 +73,54 @@ export function checkSmallProfit(threshold?: number): Promise<Record<string, unk
         body: JSON.stringify({ threshold }),
     });
 }
+
+// ── Config ─────────────────────────────────────────────────────────────────
+
+export interface ConfigResponse {
+    mt5_login: number;
+    mt5_server: string;
+    small_profit_usd: number;
+    max_lot_size: number;
+    max_open_positions: number;
+}
+
+export interface ConfigUpdatePayload {
+    mt5_login?: number;
+    mt5_password?: string;
+    mt5_server?: string;
+    small_profit_usd?: number;
+    max_lot_size?: number;
+    max_open_positions?: number;
+}
+
+/** Get current backend configuration. */
+export function getConfig(): Promise<ConfigResponse> {
+    return apiFetch<ConfigResponse>('/api/config');
+}
+
+/** Update backend configuration (writes to .env and reloads). */
+export function updateConfig(payload: ConfigUpdatePayload): Promise<{ status: string; updated_keys: string[] }> {
+    return apiFetch('/api/config', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    });
+}
+
+// ── Trading ────────────────────────────────────────────────────────────────
+
+export interface OpenOrderPayload {
+    symbol: string;
+    lot: number;
+    direction: 'BUY' | 'SELL';
+    sl?: number;
+    tp?: number;
+    comment?: string;
+}
+
+/** Open a new position. */
+export function openOrder(payload: OpenOrderPayload): Promise<Record<string, unknown>> {
+    return apiFetch('/api/open', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    });
+}

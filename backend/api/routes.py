@@ -3,14 +3,19 @@ Dunam Velocity – API Routes
 Clean FastAPI endpoints that delegate to MT5Manager and ScalperEngine.
 """
 
+import os
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from api.auth import verify_api_key
+from config.settings import get_settings
 from core.mt5_manager import MT5Manager
 from services.scalper_logic import ScalperEngine
+from services.strategy_engine import StrategyEngine
+from database.supabase_sync import SupabaseSync
 
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_api_key)])
 
@@ -18,6 +23,8 @@ router = APIRouter(prefix="/api", dependencies=[Depends(verify_api_key)])
 
 _mt5 = MT5Manager.instance()
 _scalper = ScalperEngine()
+_strategy = StrategyEngine()
+_supabase = SupabaseSync()
 
 
 # ── Request / Response Models ───────────────────────────────────────────────
@@ -49,6 +56,7 @@ async def get_status() -> dict:
     return {
         "bot": {
             "running": _scalper.is_running,
+            "strategy_running": _strategy.is_running,
             "mt5_connected": _mt5.is_connected,
         },
         "account": account,
@@ -70,6 +78,7 @@ async def start_bot() -> dict:
             return {"error": "Failed to connect to MT5", "running": False}
 
     _scalper.start()
+    _strategy.start()
     return {"status": "Bot started", "running": True}
 
 
@@ -80,6 +89,7 @@ async def stop_bot() -> dict:
         return {"status": "Bot is already stopped", "running": False}
 
     _scalper.stop()
+    _strategy.stop()
     return {"status": "Bot stopped", "running": False}
 
 
@@ -124,3 +134,94 @@ async def close_all_orders() -> dict:
 async def check_small_profit(body: SmallProfitRequest) -> dict:
     """Manually trigger a small-profit check."""
     return _scalper.check_small_profit(threshold_usd=body.threshold)
+
+
+# ── Configuration ───────────────────────────────────────────────────────────
+
+class ConfigUpdateRequest(BaseModel):
+    mt5_login: Optional[int] = None
+    mt5_password: Optional[str] = None
+    mt5_server: Optional[str] = None
+    small_profit_usd: Optional[float] = None
+    max_lot_size: Optional[float] = None
+    max_open_positions: Optional[int] = None
+    strategy_enabled: Optional[bool] = None
+
+
+@router.get("/config")
+async def get_config() -> dict:
+    """Return current configuration (non-secret fields)."""
+    settings = get_settings()
+    return {
+        "mt5_login": settings.mt5_login,
+        "mt5_server": settings.mt5_server,
+        "small_profit_usd": settings.small_profit_usd,
+        "max_lot_size": settings.max_lot_size,
+        "max_open_positions": settings.max_open_positions,
+        "strategy_enabled": settings.strategy_enabled,
+    }
+
+
+@router.post("/config")
+async def update_config(body: ConfigUpdateRequest) -> dict:
+    """Update configuration by patching the .env file and reloading settings."""
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+
+    # Read existing .env content
+    if env_path.exists():
+        env_lines = env_path.read_text(encoding="utf-8").splitlines()
+    else:
+        env_lines = []
+
+    # Build a mapping of updates
+    updates: dict[str, str] = {}
+    if body.mt5_login is not None:
+        updates["MT5_LOGIN"] = str(body.mt5_login)
+    if body.mt5_password is not None:
+        updates["MT5_PASSWORD"] = body.mt5_password
+    if body.mt5_server is not None:
+        updates["MT5_SERVER"] = body.mt5_server
+    if body.small_profit_usd is not None:
+        updates["SMALL_PROFIT_USD"] = str(body.small_profit_usd)
+    if body.max_lot_size is not None:
+        updates["MAX_LOT_SIZE"] = str(body.max_lot_size)
+    if body.max_open_positions is not None:
+        updates["MAX_OPEN_POSITIONS"] = str(body.max_open_positions)
+    if body.strategy_enabled is not None:
+        updates["STRATEGY_ENABLED"] = str(body.strategy_enabled).lower()
+
+    if not updates:
+        return {"status": "No changes provided"}
+
+    # Patch existing lines or append new ones
+    found_keys: set[str] = set()
+    new_lines: list[str] = []
+    for line in env_lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            key = stripped.split("=", 1)[0].strip()
+            if key in updates:
+                new_lines.append(f"{key}={updates[key]}")
+                found_keys.add(key)
+                continue
+        new_lines.append(line)
+
+    # Append any keys that weren't already in the file
+    for key, value in updates.items():
+        if key not in found_keys:
+            new_lines.append(f"{key}={value}")
+
+    env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+    # Clear settings cache so next call picks up new values
+    get_settings.cache_clear()
+
+    # Set environment variables for the current process too
+    for key, value in updates.items():
+        os.environ[key] = value
+
+    # Sync to Supabase for Strategy Engine
+    new_settings = get_settings() # Reload settings with new values
+    _supabase.push_config(new_settings)
+
+    return {"status": "Configuration updated", "updated_keys": list(updates.keys())}

@@ -87,3 +87,67 @@ class SupabaseSync:
             self._client.table("account_snapshots").insert(payload).execute()
         except Exception as exc:
             print(f"[Supabase] push_account_snapshot error: {exc}")
+
+    def sync_positions(self, positions: list[dict]) -> None:
+        """
+        Full sync of open positions:
+        1. Delete all existing positions in DB.
+        2. Insert current positions from MT5.
+        3. Add timestamp.
+        """
+        if not self._client:
+            return
+        
+        try:
+            # 1. Delete existing (using a standard delete-all approach if possible, or by ticket)
+            # For a full sync, deleting all is simplest to remove closed/phantom positions.
+            self._client.table("positions").delete().neq("ticket", 0).execute()
+            
+            if not positions:
+                return
+
+            # 2. Add timestamp to each position
+            payload = [
+                {
+                    **pos,
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }
+                for pos in positions
+            ]
+            
+            # 3. Insert new state
+            self._client.table("positions").insert(payload).execute()
+            
+        except Exception as exc:
+            print(f"[Supabase] sync_positions error: {exc}")
+
+    def get_bot_config(self) -> dict:
+        """Fetch the latest bot configuration."""
+        if not self._client:
+            return {}
+        try:
+            response = self._client.table("bot_config").select("*").order("updated_at", desc=True).limit(1).execute()
+            if response.data:
+                return response.data[0]
+            return {}
+        except Exception as exc:
+            # Silent fail for config fetch to avoid spamming logs if table empty
+            return {}
+
+    def push_config(self, settings: Any) -> None:
+        """Insert current configuration to 'bot_config'."""
+        if not self._client:
+            return
+        try:
+            payload = {
+                "mt5_login": str(settings.mt5_login) if settings.mt5_login else None,
+                "mt5_server": settings.mt5_server,
+                "small_profit_usd": settings.small_profit_usd,
+                "max_lot_size": settings.max_lot_size,
+                "max_open_positions": settings.max_open_positions,
+                "strategy_enabled": getattr(settings, "strategy_enabled", True),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            self._client.table("bot_config").insert(payload).execute()
+        except Exception as exc:
+            print(f"[Supabase] push_config error: {exc}")

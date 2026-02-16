@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     profit_check_interval: int = Field(default=5, description="Seconds between profit checks")
     max_lot_size: float = Field(default=1.0, description="Maximum allowed lot size per order")
     max_open_positions: int = Field(default=10, description="Maximum simultaneous open positions")
+    strategy_enabled: bool = True
 
     # ── Supabase ────────────────────────────────────────────────────────────
     supabase_url: str = Field(default="", description="Supabase project URL")

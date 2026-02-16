@@ -66,7 +66,7 @@ class ScalperEngine:
         self._supabase.push_bot_status({"running": False})
         print("[Scalper] Engine stopped.")
 
-    def check_small_profit(self, threshold_usd: Optional[float] = None) -> dict:
+    def check_small_profit(self, threshold_usd: Optional[float] = None, positions: Optional[list[dict]] = None) -> dict:
         """
         Check if total floating P&L ≥ threshold.
         If so, close all positions and return the result.
@@ -75,11 +75,14 @@ class ScalperEngine:
         if threshold_usd is None:
             threshold_usd = settings.small_profit_usd
 
-        positions = self._mt5.get_positions()
+        if positions is None:
+            positions = self._mt5.get_positions()
+
         if not positions:
             return {
                 "triggered": False,
                 "total_profit": 0.0,
+                "threshold": threshold_usd,
                 "message": "No open positions",
             }
 
@@ -91,7 +94,7 @@ class ScalperEngine:
             # Log each closed trade to Supabase
             self._supabase.push_trade({
                 "action": "small_profit_close",
-                "total_profit": round(total_profit, 2),
+                "profit": round(total_profit, 2),
                 "threshold": threshold_usd,
                 "positions_closed": close_result.get("closed", 0),
             })
@@ -122,7 +125,12 @@ class ScalperEngine:
 
         while not self._stop_event.is_set():
             try:
-                result = self.check_small_profit()
+                # 1. Get current positions & sync to DB
+                positions = self._mt5.get_positions()
+                self._supabase.sync_positions(positions)
+
+                # 2. Check logic
+                result = self.check_small_profit(positions=positions)
 
                 if result["triggered"]:
                     print(

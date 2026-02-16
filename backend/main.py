@@ -11,7 +11,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from api.routes import router, _mt5, _scalper
+from api.routes import router, _mt5, _scalper, _strategy
 from config.settings import get_settings
 
 
@@ -41,6 +41,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     print("[Main] Shutting down...")
     if _scalper.is_running:
         _scalper.stop()
+    if _strategy.is_running:
+        _strategy.stop()
     _mt5.disconnect()
     print("[Main] Goodbye.")
 
