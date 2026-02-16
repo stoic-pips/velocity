@@ -90,6 +90,7 @@ class ScalperEngine:
             return {
                 "triggered": False,
                 "total_profit": 0.0,
+                "threshold": threshold_profit,
                 "message": "No open positions",
             }
 
@@ -132,6 +133,7 @@ class ScalperEngine:
         return {
             "triggered": False,
             "total_profit": round(total_profit, 2),
+            "threshold": threshold_profit,
             "message": f"P&L {total_profit:.2f} within bounds ({threshold_loss_usd:.2f} to {threshold_profit:.2f})",
         }
 

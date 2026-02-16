@@ -65,13 +65,20 @@ class SupabaseSync:
         if not self._client:
             return
         try:
+            # Map code-friendly names to DB-friendly names
+            is_running = status.get("running")
+            if is_running is None:
+                is_running = status.get("is_running", False)
+
             payload = {
-                "id": "velocity_bot",
-                **status,
+                "user_id": "velocity_bot",
+                "is_running": is_running,
+                "open_pl": status.get("open_pl", 0.0),
+                "position_count": status.get("position_count", 0),
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             self._client.table("bot_status").upsert(payload).execute()
-            print(f"[Supabase] Bot status pushed: {status}")
+            print(f"[Supabase] Bot status pushed: {payload}")
         except Exception as exc:
             print(f"[Supabase] push_bot_status error: {exc}")
 
