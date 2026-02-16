@@ -9,6 +9,7 @@ build/
 # ── Node / React Native ────────────
 node_modules/
 mobile/node_modules/
+node_modules_old/
 .expo/
 *.tsbuildinfo
 
