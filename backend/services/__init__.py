@@ -1,4 +1,4 @@
 # Services package
-from services.scalper_logic import ScalperEngine
+from services.dunam_velocity import DunamVelocity
 
-__all__ = ["ScalperEngine"]
+__all__ = ["DunamVelocity"]

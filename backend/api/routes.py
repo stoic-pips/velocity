@@ -1,6 +1,6 @@
 """
 Dunam Velocity – API Routes
-Clean FastAPI endpoints that delegate to MT5Manager and ScalperEngine.
+Clean FastAPI endpoints that delegate to MT5Client and DunamVelocity.
 """
 
 import os
@@ -12,18 +12,16 @@ from pydantic import BaseModel
 
 from api.auth import verify_api_key
 from config.settings import get_settings
-from core.mt5_manager import MT5Manager
-from services.scalper_logic import ScalperEngine
-from services.strategy_engine import StrategyEngine
+from core.mt5_client import MT5Client
+from services.dunam_velocity import DunamVelocity
 from database.supabase_sync import SupabaseSync
 
 router = APIRouter(prefix="/api", dependencies=[Depends(verify_api_key)])
 
 # ── Singletons ──────────────────────────────────────────────────────────────
 
-_mt5 = MT5Manager.instance()
-_scalper = ScalperEngine()
-_strategy = StrategyEngine()
+_mt5 = MT5Client.instance()
+_dunam = DunamVelocity()
 _supabase = SupabaseSync()
 
 
@@ -55,8 +53,8 @@ async def get_status() -> dict:
     positions = _mt5.get_positions()
     return {
         "bot": {
-            "is_active": _scalper.is_running,
-            "strategy_running": _strategy.is_running,
+            "is_active": _dunam.is_running,
+            "strategy_running": _dunam.is_running,
             "mt5_connected": _mt5.is_connected,
         },
         "account": account,
@@ -77,8 +75,8 @@ async def get_symbols() -> dict:
 
 @router.post("/start")
 async def start_bot() -> dict:
-    """Connect to MT5 and start the scalper engine."""
-    if _scalper.is_running:
+    """Connect to MT5 and start the DunamVelocity engine."""
+    if _dunam.is_running:
         return {"status": "Bot is already running", "is_active": True}
 
     # Ensure MT5 is connected
@@ -87,19 +85,17 @@ async def start_bot() -> dict:
         if not connected:
             return {"error": "Failed to connect to MT5", "running": False}
 
-    _scalper.start()
-    _strategy.start()
+    _dunam.start()
     return {"status": "Bot started", "is_active": True}
 
 
 @router.post("/stop")
 async def stop_bot() -> dict:
-    """Stop the scalper engine."""
-    if not _scalper.is_running:
+    """Stop the DunamVelocity engine."""
+    if not _dunam.is_running:
         return {"status": "Bot is already stopped", "is_active": False}
 
-    _scalper.stop()
-    _strategy.stop()
+    _dunam.stop()
     return {"status": "Bot stopped", "is_active": False}
 
 
@@ -138,12 +134,6 @@ async def close_all_orders() -> dict:
         return {"success": False, "error": "MT5 not connected"}
 
     return _mt5.close_all_orders()
-
-
-@router.post("/small-profit")
-async def check_small_profit(body: SmallProfitRequest) -> dict:
-    """Manually trigger a small-profit check."""
-    return _scalper.check_risk_parameters()
 
 
 # ── Configuration ───────────────────────────────────────────────────────────

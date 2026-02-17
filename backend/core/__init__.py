@@ -1,4 +1,4 @@
 # Core package
-from core.mt5_manager import MT5Manager
+from core.mt5_client import MT5Client
 
-__all__ = ["MT5Manager"]
+__all__ = ["MT5Client"]

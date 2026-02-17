@@ -14,18 +14,18 @@ import MetaTrader5 as mt5
 from config.settings import get_settings
 
 
-class MT5Manager:
+class MT5Client:
     """
     Singleton class to manage MetaTrader 5 connection and operations.
     Thread-safe storage of the connection state.
     """
 
-    _instance: Optional["MT5Manager"] = None
+    _instance: Optional["MT5Client"] = None
     _lock: threading.Lock = threading.Lock()
 
     # ── Singleton ───────────────────────────────────────────────────────────
 
-    def __new__(cls) -> "MT5Manager":
+    def __new__(cls) -> "MT5Client":
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -36,7 +36,7 @@ class MT5Manager:
         return cls._instance
 
     @classmethod
-    def instance(cls) -> MT5Manager:
+    def instance(cls) -> MT5Client:
         """Explicit accessor for the singleton instance."""
         return cls()
 
