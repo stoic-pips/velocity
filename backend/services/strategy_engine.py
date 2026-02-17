@@ -118,7 +118,7 @@ class StrategyEngine:
                 # Better to just return and let next cycle handle it, 
                 # or do a short sleep. Strategy loop has its own sleep.
                 # Let's retry immediately once.
-                import time
+                # import time
                 time.sleep(0.1)
                 tick = self._mt5.get_tick(symbol)
             
@@ -158,7 +158,8 @@ class StrategyEngine:
         # Adaptive Profit Logic
         if vol_check.get('extreme'):
             # settings.small_profit_usd *= 2.0  <-- Removed to prevent runaway growth
-            print(f"[Strategy] ⚡ EXTREME VOLATILITY DETECTED on {symbol}. Suggest manual profit target adjustment.")
+            if int(time.time()) % 60 == 0:
+                print(f"[Strategy] ⚡ EXTREME VOLATILITY DETECTED on {symbol}. Suggest manual profit target adjustment.")
 
         close = target_candle['close']
         sma = target_candle['SMA_10']
