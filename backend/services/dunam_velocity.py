@@ -2,7 +2,7 @@ import threading
 import time
 import traceback
 from datetime import datetime, timezone
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 import MetaTrader5 as mt5
 import pandas as pd
@@ -10,6 +10,7 @@ import numpy as np
 
 from config.settings import get_settings
 from core.mt5_client import MT5Client
+from core.runtime_config import RuntimeConfig
 from database.supabase_sync import SupabaseSync
 from services.base_strategy import BaseStrategy
 
@@ -21,32 +22,50 @@ class DunamVelocity(BaseStrategy):
     """
 
     def __init__(self, check_interval: float = 1.0):
-        self.check_interval = check_interval
-        
         # Threading control
         self._stop_event = threading.Event()
         self._entry_thread: Optional[threading.Thread] = None
         self._exit_thread: Optional[threading.Thread] = None
-        self._lock = threading.Lock()
         
         # Dependencies
         self._mt5 = MT5Client.instance()
         self._supabase = SupabaseSync()
         
         # State
-        # Track last trade time per symbol to enforce "one trade per candle"
-        # Format: { "SYMBOL": timestamp_of_candle }
         self._last_trade_candles: Dict[str, int] = {}
         self._is_running = False
+        self._user_id = "velocity_bot" # Default fallback
+        
+        # Configuration (Runtime)
+        self._config: Optional[RuntimeConfig] = None
+        self._lock = threading.Lock()
 
     @property
     def is_running(self) -> bool:
         return self._is_running
 
-    def start(self) -> None:
+    def start(self, user_id: Optional[str] = None) -> None:
         """Start both entry (scanning) and exit (monitoring) loops."""
         if self._is_running:
             return
+
+        # Attempt to resolve user_id if provided or fetch default
+        if user_id:
+            self._user_id = user_id
+        else:
+            default_id = self._supabase.get_first_user_id()
+            if default_id:
+                self._user_id = default_id
+                print(f"[DunamVelocity] Using default User ID: {self._user_id}")
+
+        # Initial Config Load
+        self._refresh_config()
+        if not self._config:
+            print("[DunamVelocity] CRITICAL: Could not load configuration from Supabase. Starting in standby.")
+            # We still start threads, but they will pause until config is valid.
+
+        # Subscribe to Realtime Updates
+        self._supabase.listen_for_changes(self._user_id, self._on_config_update)
 
         print("[DunamVelocity] Starting engine...")
         self._stop_event.clear()
@@ -58,7 +77,8 @@ class DunamVelocity(BaseStrategy):
         self._entry_thread.start()
         self._exit_thread.start()
         
-        self._supabase.push_bot_status({"running": True})
+        self._supabase.push_bot_status({"running": True}, user_id=self._user_id)
+        self._supabase.log_system_event(self._user_id, "Bot Started", "info", {"version": "2.0.0"})
         print("[DunamVelocity] Engine started.")
 
     def stop(self) -> None:
@@ -76,32 +96,70 @@ class DunamVelocity(BaseStrategy):
             self._exit_thread.join(timeout=2.0)
             
         self._is_running = False
-        self._supabase.push_bot_status({"running": False})
+        self._supabase.push_bot_status({"running": False}, user_id=self._user_id)
+        self._supabase.log_system_event(self._user_id, "Bot Stopped", "info")
         print("[DunamVelocity] Engine stopped.")
 
-    # ── Entry Logic (formerly StrategyEngine) ─────────────────────────────────
+    def _refresh_config(self) -> None:
+        """Fetch latest config from Supabase and update local state securely."""
+        new_config = self._supabase.get_active_config(self._user_id)
+        if new_config:
+            with self._lock:
+                self._config = new_config
+            
+            # Attempt to connect/reconnect MT5 with new credentials
+            # This is safe to call repeatedly as MT5Client handles checks
+            connected = self._mt5.connect(
+                login=new_config.mt5_login,
+                password=new_config.mt5_password,
+                server=new_config.mt5_server,
+                path=new_config.mt5_path
+            )
+            
+            if connected:
+                print(f"[DunamVelocity] Configuration refreshed & MT5 Connected for {self._user_id}")
+            else:
+                print(f"[DunamVelocity] Configuration refreshed but MT5 Connection FAILED for {self._user_id}")
+        else:
+            print(f"[DunamVelocity] Failed to refresh config for {self._user_id}")
+
+    def _on_config_update(self) -> None:
+        """Callback for Realtime subscription."""
+        print("[DunamVelocity] Realtime update detected. Refreshing...")
+        self._refresh_config()
+        # Log event
+        self._supabase.log_system_event(self._user_id, "Config Updated", "info", {"source": "realtime"})
+
+    # ── Entry Logic ───────────────────────────────────────────────────────────
 
     def _entry_loop(self) -> None:
         """Continuous market scanning loop."""
-        print(f"[Entry] Loop started. Interval: {self.check_interval}s")
+        print(f"[Entry] Loop started.")
 
         while not self._stop_event.is_set():
             try:
-                settings = get_settings()
+                # Thread-safe config access
+                with self._lock:
+                    cfg = self._config
+
+                # Fail-safe: If no config, wait and retry
+                if not cfg:
+                    time.sleep(5)
+                    continue
                 
                 # 1. Check if Strategy is Enabled
-                if not settings.strategy_enabled:
-                    time.sleep(settings.strategy_check_interval)
+                if not cfg.is_active:
+                    time.sleep(cfg.strategy_check_interval * 2) 
                     continue
-
+                
                 # 2. Check Max Positions
                 open_positions = self._mt5.get_positions()
-                if len(open_positions) >= settings.max_open_positions:
-                    time.sleep(settings.strategy_check_interval)
+                if len(open_positions) >= cfg.max_open_positions:
+                    time.sleep(cfg.strategy_check_interval)
                     continue
 
                 # 3. Scan Symbols
-                symbols_str = settings.strategy_symbols
+                symbols_str = cfg.strategy_symbols
                 symbols = [s.strip() for s in symbols_str.split(",") if s.strip()]
                 
                 for symbol in symbols:
@@ -109,20 +167,19 @@ class DunamVelocity(BaseStrategy):
                         break
                     
                     try:
-                        self._scan_market(symbol)
+                        self._scan_market(symbol, cfg)
                     except Exception as e:
                         print(f"[Entry] Error scanning {symbol}: {e}")
+
+                time.sleep(cfg.strategy_check_interval)
 
             except Exception as exc:
                 print(f"[Entry] Loop error: {exc}")
                 traceback.print_exc()
+                time.sleep(5)
 
-            time.sleep(get_settings().strategy_check_interval)
-
-    def _scan_market(self, symbol: str) -> None:
+    def _scan_market(self, symbol: str, cfg: RuntimeConfig) -> None:
         """Fetch data, calculate signals, and execute trades."""
-        settings = get_settings()
-        
         # 1. Map Timeframe
         tf_map = {
             "M1": mt5.TIMEFRAME_M1,
@@ -131,7 +188,7 @@ class DunamVelocity(BaseStrategy):
             "M30": mt5.TIMEFRAME_M30,
             "H1": mt5.TIMEFRAME_H1,
         }
-        timeframe = tf_map.get(settings.strategy_timeframe, mt5.TIMEFRAME_M1)
+        timeframe = tf_map.get(cfg.strategy_timeframe, mt5.TIMEFRAME_M1)
         
         # Verify symbol and get rates
         tick = self._mt5.get_tick(symbol)
@@ -153,17 +210,18 @@ class DunamVelocity(BaseStrategy):
         df = self._calculate_indicators(df)
         
         # 3. Check Signal
-        # live_candle_signals: True=current(-1), False=closed(-2)
-        signal_index = -1 if settings.live_candle_signals else -2
+        # live_candle_signals not currently in RuntimeConfig (assume False for robustness)
+        # We can add it to RuntimeConfig if needed.
+        signal_index = -2 # Closed candle
         target_candle = df.iloc[signal_index]
         current_candle_time = int(target_candle['time'].timestamp())
         
-        # Enforce one trade per candle (if not running in live tick mode)
-        if not settings.live_candle_signals and self._last_trade_candles.get(symbol) == current_candle_time:
+        # Enforce one trade per candle
+        if self._last_trade_candles.get(symbol) == current_candle_time:
             return
 
         # 4. Volatility Filter
-        vol_check = self._check_volatility(symbol, df)
+        vol_check = self._check_volatility(symbol, df, cfg)
         if not vol_check['allowed']:
             return
 
@@ -184,7 +242,7 @@ class DunamVelocity(BaseStrategy):
             signal = "SELL"
             
         if signal:
-            lot = self._calculate_lot_size(symbol)
+            lot = self._calculate_lot_size(symbol, cfg)
             print(f"[Entry] 🚀 {signal} Signal for {symbol} | Lot: {lot}")
             
             res = self._mt5.open_order(
@@ -197,6 +255,7 @@ class DunamVelocity(BaseStrategy):
             if res['success']:
                 print(f"[Entry] Trade Executed: {res['ticket']}")
                 self._last_trade_candles[symbol] = current_candle_time
+                self._supabase.log_system_event(self._user_id, f"Trade Open: {symbol} {signal}", "info", {"ticket": res['ticket']})
             else:
                 print(f"[Entry] Trade Failed: {res.get('error')}")
 
@@ -224,15 +283,14 @@ class DunamVelocity(BaseStrategy):
         
         return df
 
-    def _check_volatility(self, symbol: str, df: pd.DataFrame) -> Dict:
+    def _check_volatility(self, symbol: str, df: pd.DataFrame, cfg: RuntimeConfig) -> Dict:
         """Check ATR threshold, volatility expansion, and spread cost."""
-        settings = get_settings()
-        if not settings.volatility_filter_enabled:
+        if not cfg.volatility_filter_enabled:
             return {'allowed': True}
 
         # 1. ATR Check
         current_atr = df['ATR_14'].iloc[-1]
-        if current_atr < settings.min_atr_threshold:
+        if current_atr < cfg.min_atr_threshold:
             return {'allowed': False, 'reason': 'Low ATR'}
 
         # 2. Volatility Expansion
@@ -251,16 +309,15 @@ class DunamVelocity(BaseStrategy):
                 vol_min = info.volume_min if info.volume_min > 0 else 0.01
                 spread_cost = (spread_points / info.point) * info.trade_tick_value * vol_min
                 
-                target_usd = settings.small_profit_usd
+                target_usd = cfg.small_profit_usd
                 if spread_cost > (target_usd * 0.3):
                     return {'allowed': False, 'reason': 'High Spread'}
 
         return {'allowed': True}
 
-    def _calculate_lot_size(self, symbol: str) -> float:
+    def _calculate_lot_size(self, symbol: str, cfg: RuntimeConfig) -> float:
         """Calculate dynamic lot size based on equity and risk multiplier."""
-        settings = get_settings()
-        if not settings.auto_lot_enabled:
+        if not cfg.auto_lot_enabled:
             return 0.01
 
         account = self._mt5.get_account_info()
@@ -268,7 +325,7 @@ class DunamVelocity(BaseStrategy):
             return 0.01
             
         equity = account.get("equity", 0.0)
-        lot = (equity / 1000.0) * settings.risk_multiplier
+        lot = (equity / 1000.0) * cfg.risk_multiplier
         
         # Clamp to broker limits
         sym_info = mt5.symbol_info(symbol)
@@ -282,15 +339,23 @@ class DunamVelocity(BaseStrategy):
             
         return round(lot, 2)
 
-    # ── Exit Logic (formerly ScalperEngine) ──────────────────────────────────
+    # ── Exit Logic ────────────────────────────────────────────────────────────
 
     def _exit_loop(self) -> None:
         """Monitor P&L and Trigger Entry/Exit Actions."""
-        settings = get_settings()
-        print(f"[Exit] Loop started. Check Interval: {settings.profit_check_interval}s")
+        print(f"[Exit] Loop started.")
 
         while not self._stop_event.is_set():
             try:
+                # Thread-safe config access
+                with self._lock:
+                    cfg = self._config
+                
+                # Default sleep if no config
+                if not cfg:
+                    time.sleep(5)
+                    continue
+
                 # 1. Sync Positions
                 positions = self._mt5.get_positions()
                 self._supabase.sync_positions(positions)
@@ -301,30 +366,33 @@ class DunamVelocity(BaseStrategy):
                     "running": True,
                     "open_pl": round(total_profit, 2),
                     "position_count": len(positions)
-                })
+                }, user_id=self._user_id) 
 
                 # 3. Check Risk & Profit
-                self._check_risk_parameters(positions, total_profit)
+                self._check_risk_parameters(positions, total_profit, cfg)
 
                 # 4. Snapshot
                 account = self._mt5.get_account_info()
                 if account:
                     self._supabase.push_account_snapshot(account)
-
+            
             except Exception as exc:
                 print(f"[Exit] Loop error: {exc}")
+                time.sleep(1)
 
-            time.sleep(get_settings().profit_check_interval)
+            # Use configured interval (default 1s if not set)
+            # cfg.strategy_check_interval is for entry, maybe we want separate exit interval?
+            # Reusing strategy_check_interval or hardcoding 1s for responsiveness.
+            time.sleep(1.0) 
 
-    def _check_risk_parameters(self, positions: List[Dict], total_profit: float) -> None:
+    def _check_risk_parameters(self, positions: List[Dict], total_profit: float, cfg: RuntimeConfig) -> None:
         """Check for Small Profit Take or Max Loss Circuit Breaker."""
-        settings = get_settings()
-        threshold_profit = settings.small_profit_usd
+        threshold_profit = cfg.small_profit_usd
         
         # Calculate dynamic Max Loss
         account = self._mt5.get_account_info()
         equity = account.get("equity", 1000.0) if account else 1000.0
-        threshold_loss_usd = -(equity * (settings.max_loss_percent / 100.0))
+        threshold_loss_usd = -(equity * (cfg.max_loss_percent / 100.0))
 
         if not positions:
             return
@@ -338,6 +406,7 @@ class DunamVelocity(BaseStrategy):
                 "threshold": threshold_profit,
                 "positions_closed": res.get("closed", 0),
             })
+            self._supabase.log_system_event(self._user_id, "Profit Target Hit", "success", {"profit": total_profit})
             print(f"[Exit] 🎯 Profit Target Hit: ${total_profit:.2f}. Closed {res.get('closed')} trades.")
 
         # Case 2: Max Loss Circuit Breaker
@@ -347,7 +416,8 @@ class DunamVelocity(BaseStrategy):
                 "action": "max_loss_circuit_breaker",
                 "profit": round(total_profit, 2),
                 "threshold": round(threshold_loss_usd, 2),
-                "percent": settings.max_loss_percent,
+                "percent": cfg.max_loss_percent,
                 "positions_closed": res.get("closed", 0),
             })
-            print(f"[Exit] 🛡️ CIRCUIT BREAKER: {settings.max_loss_percent}% Loss hit (${total_profit:.2f}). Closed all.")
+            self._supabase.log_system_event(self._user_id, "Circuit Breaker Triggered", "warning", {"loss": total_profit})
+            print(f"[Exit] 🛡️ CIRCUIT BREAKER: {cfg.max_loss_percent}% Loss hit (${total_profit:.2f}). Closed all.")

@@ -95,11 +95,21 @@ export default function ConfigPage() {
         e.preventDefault();
         setLoading(true);
         try {
+            // Get current user for config update
+            const { data: { user } } = await import('@/lib/supabase').then(m => m.supabase.auth.getUser());
+
+            if (!user) {
+                alert('You must be logged in to save configuration.');
+                setLoading(false);
+                return;
+            }
+
             await apiUpdateConfig({
                 mt5_login: config.mt5_login,
                 mt5_password: config.mt5_password || undefined,
                 mt5_server: config.mt5_server || undefined,
                 strategy_symbols: config.strategy_symbols,
+                user_id: user.id
             });
             alert('Configuration saved to backend');
             // Refresh symbols after saving credentials/reconnect

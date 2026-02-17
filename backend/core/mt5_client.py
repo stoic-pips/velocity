@@ -47,24 +47,34 @@ class MT5Client:
         """Whether the MT5 terminal is currently connected."""
         return self._connected
 
-    def connect(self) -> bool:
+    def connect(
+        self,
+        login: int = None,
+        password: str = None,
+        server: str = None,
+        path: str = None
+    ) -> bool:
         """
         Initialize and log in to the MT5 terminal.
         Returns True on success, False on failure.
         """
         with self._api_lock:
-            settings = get_settings()
+            # If already connected and no new credentials provided, just return True
+            if self._connected and not (login or password or server or path):
+                return True
+
             init_kwargs: dict = {}
 
-            if settings.mt5_path:
-                init_kwargs["path"] = settings.mt5_path
-            if settings.mt5_login:
-                init_kwargs["login"] = settings.mt5_login
-            if settings.mt5_password:
-                init_kwargs["password"] = settings.mt5_password
-            if settings.mt5_server:
-                init_kwargs["server"] = settings.mt5_server
+            if path:
+                init_kwargs["path"] = path
+            if login:
+                init_kwargs["login"] = login
+            if password:
+                init_kwargs["password"] = password
+            if server:
+                init_kwargs["server"] = server
 
+            # If no credentials provided, try initializing without them (MT5 might pick up last session)
             if not mt5.initialize(**init_kwargs):
                 print(f"[MT5] initialize() failed – {mt5.last_error()}")
                 self._connected = False

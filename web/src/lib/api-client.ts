@@ -87,6 +87,7 @@ export interface ConfigUpdatePayload {
     mt5_password?: string;
     mt5_server?: string;
     strategy_symbols?: string;
+    user_id?: string;
 }
 
 /** Get current backend configuration. */

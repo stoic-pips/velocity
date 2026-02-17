@@ -139,86 +139,90 @@ async def close_all_orders() -> dict:
 # ── Configuration ───────────────────────────────────────────────────────────
 
 class ConfigUpdateRequest(BaseModel):
+    user_id: str # Required now for Supabase update
     mt5_login: Optional[int] = None
     mt5_password: Optional[str] = None
     mt5_server: Optional[str] = None
     strategy_symbols: Optional[str] = None
+    strategy_timeframe: Optional[str] = None
+    is_active: Optional[bool] = None
+    risk_multiplier: Optional[float] = None
 
 
 @router.get("/config")
-async def get_config() -> dict:
-    """Return current configuration (non-secret fields)."""
-    settings = get_settings()
-    return {
-        "mt5_login": settings.mt5_login,
-        "mt5_server": settings.mt5_server,
-        "strategy_symbols": settings.strategy_symbols,
-    }
+async def get_config(user_id: Optional[str] = None) -> dict:
+    """Return current configuration from Supabase."""
+    # If we have a running bot with a config, we could return that.
+    # But usually API should fetch from DB to be stateless/accurate.
+    
+    # Try to get user_id from running bot if not provided
+    target_user_id = user_id or _dunam._user_id
+    
+    if not target_user_id or target_user_id == "velocity_bot":
+        # Try to find ANY user config if we are in single-user mode
+        target_user_id = _supabase.get_first_user_id()
+    
+    if not target_user_id:
+        return {"error": "No configuration found. Please initialize via Dashboard."}
+
+    config = _supabase.get_active_config(target_user_id)
+    if not config:
+        return {"error": "Failed to load config from Supabase"}
+        
+    return config.model_dump()
 
 
 @router.post("/config")
 async def update_config(body: ConfigUpdateRequest) -> dict:
-    """Update configuration by patching the .env file and reloading settings."""
-    env_path = Path(__file__).resolve().parent.parent / ".env"
-
-    # Read existing .env content
-    if env_path.exists():
-        env_lines = env_path.read_text(encoding="utf-8").splitlines()
-    else:
-        env_lines = []
-
-    # Build a mapping of updates
-    updates: dict[str, str] = {}
-    if body.mt5_login is not None:
-        updates["MT5_LOGIN"] = str(body.mt5_login)
-    if body.mt5_password is not None:
-        updates["MT5_PASSWORD"] = body.mt5_password
-    if body.mt5_server is not None:
-        updates["MT5_SERVER"] = body.mt5_server
+    """Update configuration in Supabase (triggers realtime update in Bot)."""
+    
+    updates = {}
+    
+    # Map flat API fields to DB structure (JSONB for some)
+    # We can use SupabaseSync.update_bot_config which expects a dict representing columns/jsonb
+    
+    # 1. Top Level
     if body.strategy_symbols is not None:
-        updates["STRATEGY_SYMBOLS"] = body.strategy_symbols
+        updates["strategy_symbols"] = body.strategy_symbols
+    if body.strategy_timeframe is not None:
+        updates["strategy_timeframe"] = body.strategy_timeframe
+    if body.is_active is not None:
+        updates["is_active"] = body.is_active
+
+    # 2. MT5 Credentials (JSONB merge not supported deeply by basic update, usually replace)
+    # We need to fetch existing to merge, or use a customized sync method.
+    # Let's fetch current config first to merge safely?
+    # Or just push what we have if Supabase `push_config` handles it.
+    # _supabase.update_bot_config does a direct update.
+    
+    # Let's construct a smart update payload.
+    # Note: If we update 'mt5_credentials', we overwrite it unless we merge in code.
+    current_config = _supabase.get_bot_config(body.user_id)
+    
+    if body.mt5_login or body.mt5_password or body.mt5_server:
+        creds = current_config.get("mt5_credentials", {}) or {}
+        if body.mt5_login is not None:
+            creds["login"] = str(body.mt5_login)
+        if body.mt5_password is not None:
+             creds["password"] = body.mt5_password
+        if body.mt5_server is not None:
+             creds["server"] = body.mt5_server
+        updates["mt5_credentials"] = creds
+        
+    if body.risk_multiplier is not None:
+        risk = current_config.get("risk_params", {}) or {}
+        risk["risk_multiplier"] = body.risk_multiplier
+        updates["risk_params"] = risk
 
     if not updates:
-        return {"status": "No changes provided"}
+         return {"status": "No changes provided"}
 
-    # Patch existing lines or append new ones
-    found_keys: set[str] = set()
-    new_lines: list[str] = []
-    for line in env_lines:
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#"):
-            key = stripped.split("=", 1)[0].strip()
-            if key in updates:
-                new_lines.append(f"{key}={updates[key]}")
-                found_keys.add(key)
-                continue
-        new_lines.append(line)
-
-    # Append any keys that weren't already in the file
-    for key, value in updates.items():
-        if key not in found_keys:
-            new_lines.append(f"{key}={value}")
-
-    env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-
-    # Clear settings cache so next call picks up new values
-    get_settings.cache_clear()
-
-    # Set environment variables for the current process too
-    for key, value in updates.items():
-        os.environ[key] = value
-
-    # If credentials changed, attempt to reconnect MT5
-    if any(k in updates for k in ["MT5_LOGIN", "MT5_PASSWORD", "MT5_SERVER", "MT5_PATH"]):
-        print("[API] MT5 Credentials updated. Attempting reconnection...")
-        _mt5.disconnect()
-        _mt5.connect()
-
-    # Sync to Supabase for Strategy Engine
-    new_settings = get_settings() # Reload settings with new values
-    _supabase.push_config(new_settings)
-
-    return {"status": "Configuration updated", "updated_keys": list(updates.keys())}
+    updated = _supabase.update_bot_config(body.user_id, updates)
+    
+    if updated:
+        return {"status": "Configuration updated", "updated_keys": list(updates.keys())}
+    else:
+        return {"status": "Update failed", "error": "Database write failed"}
 
 
 # ── Sync ────────────────────────────────────────────────────────────────────
