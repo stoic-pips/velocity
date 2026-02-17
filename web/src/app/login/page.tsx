@@ -19,17 +19,33 @@ export default function Login() {
         setLoading(true);
         setError(null);
 
-        const { error } = await supabase.auth.signInWithPassword({
-            email,
-            password,
-        });
+        try {
+            const { error } = await supabase.auth.signInWithPassword({
+                email,
+                password,
+            });
 
-        if (error) {
-            setError(error.message);
+            if (error) {
+                // Map common error messages to user-friendly ones
+                if (error.message.includes('Invalid login credentials')) {
+                    setError('Incorrect email or password. Please try again.');
+                } else if (error.message.includes('Email not confirmed')) {
+                    setError('Please confirm your email address before signing in.');
+                } else {
+                    setError(error.message);
+                }
+                setLoading(false);
+            } else {
+                // Successful login
+                // Check if there's a return URL
+                const params = new URLSearchParams(window.location.search);
+                const next = params.get('next') || '/';
+                router.push(next);
+                router.refresh(); // Refresh server components
+            }
+        } catch (err) {
+            setError('An unexpected network error occurred.');
             setLoading(false);
-        } else {
-            router.push('/');
-            router.refresh();
         }
     };
 
@@ -50,8 +66,8 @@ export default function Login() {
                     <form onSubmit={handleLogin} className="space-y-6">
 
                         {error && (
-                            <div className="bg-stoic-danger/10 border border-stoic-danger/20 text-stoic-danger p-4 rounded-xl flex items-center gap-3 text-sm">
-                                <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                            <div className="bg-stoic-danger/10 border border-stoic-danger/20 text-stoic-danger p-4 rounded-xl flex items-start gap-3 text-sm animate-in fade-in slide-in-from-top-2">
+                                <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
                                 <span>{error}</span>
                             </div>
                         )}

@@ -54,17 +54,30 @@ export async function middleware(request: NextRequest) {
         }
     )
 
-    const {
-        data: { session },
-    } = await supabase.auth.getSession()
+    // IMPORTANT: Avoid writing any logic between createServerClient and
+    // supabase.auth.getUser(). A simple mistake could make it very hard to debug
+    // issues with users being randomly logged out.
 
-    // If no session and trying to access protected route (home), redirect to login
-    if (!session && request.nextUrl.pathname === '/') {
-        return NextResponse.redirect(new URL('/login', request.url))
+    const {
+        data: { user },
+    } = await supabase.auth.getUser()
+
+    // Protected routes pattern
+    // Update this to match your actual protected routes, e.g. /dashboard
+    // Assuming '/' is the dashboard given previous code redirects login -> /
+    const isProtectedRoute = request.nextUrl.pathname === '/' || request.nextUrl.pathname.startsWith('/dashboard')
+    const isAuthRoute = request.nextUrl.pathname === '/login' || request.nextUrl.pathname === '/signup'
+
+    if (!user && isProtectedRoute) {
+        // Redirect to login with return url
+        const url = request.nextUrl.clone()
+        url.pathname = '/login'
+        url.searchParams.set('next', request.nextUrl.pathname)
+        return NextResponse.redirect(url)
     }
 
-    // If session and trying to access login or signup, redirect to home
-    if (session && (request.nextUrl.pathname === '/login' || request.nextUrl.pathname === '/signup')) {
+    if (user && isAuthRoute) {
+        // Redirect to home/dashboard if already logged in
         return NextResponse.redirect(new URL('/', request.url))
     }
 
