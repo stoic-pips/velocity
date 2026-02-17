@@ -162,3 +162,62 @@ class SupabaseSync:
             self._client.table("bot_config").insert(payload).execute()
         except Exception as exc:
             print(f"[Supabase] push_config error: {exc}")
+
+    # ── Risk & Monitor Methods ──────────────────────────────────────────────
+
+    def fetch_risk_settings(self, user_id: str) -> Optional[dict]:
+        """Fetch risk parameters from 'bot_configs'."""
+        if not self._client:
+            return None
+        try:
+            # Assuming 'bot_configs' table exists as per requirements
+            response = self._client.table("bot_configs")\
+                .select("risk_params, is_active")\
+                .eq("user_id", user_id)\
+                .single()\
+                .execute()
+            
+            if response.data:
+                # Merge top-level fields if needed, but return risk_params primarily
+                data = response.data
+                risk_params = data.get("risk_params", {}) or {}
+                # Ensure we return a dict that keys match what AccountMonitor expects
+                return risk_params
+            return None
+        except Exception as exc:
+            print(f"[Supabase] fetch_risk_settings error: {exc}")
+            return None
+
+    def update_bot_active_status(self, user_id: str, is_active: bool) -> None:
+        """Update the active status of the bot for a user."""
+        if not self._client:
+            return
+        try:
+            self._client.table("bot_configs")\
+                .update({"is_active": is_active, "updated_at": datetime.now(timezone.utc).isoformat()})\
+                .eq("user_id", user_id)\
+                .execute()
+            print(f"[Supabase] Bot active status updated to {is_active} for {user_id}")
+        except Exception as exc:
+            print(f"[Supabase] update_bot_active_status error: {exc}")
+
+    def push_notification(self, user_id: str, message: str, level: str = "info") -> None:
+        """Push a notification to the dashboard (via 'notifications' table or similar)."""
+        if not self._client:
+            return
+        try:
+            # Assuming a 'notifications' table exists or using a method to push to frontend
+            # If 'notifications' table doesn't exist, this will fail silently (logged).
+            # Alternatively, could use 'bot_status' to convey messages.
+            
+            payload = {
+                "user_id": user_id,
+                "message": message,
+                "level": level, # info, warning, critical, success
+                "read": False,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            self._client.table("notifications").insert(payload).execute()
+            print(f"[Supabase] Notification pushed: {message}")
+        except Exception as exc:
+            print(f"[Supabase] push_notification error: {exc}")
