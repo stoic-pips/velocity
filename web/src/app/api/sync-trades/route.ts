@@ -1,7 +1,9 @@
 import { createClient } from '@/utils/supabase/server';
 import { NextRequest, NextResponse } from 'next/server';
 
-export const runtime = 'nodejs'; // Use nodejs runtime for robust fetch handling
+// export const runtime = 'nodejs'; // Use nodejs runtime for robust fetch handling
+
+export const runtime = 'edge';
 
 export async function POST(request: NextRequest) {
     const supabase = createClient();
