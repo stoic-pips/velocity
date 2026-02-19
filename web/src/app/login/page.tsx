@@ -122,12 +122,12 @@ export default function Login() {
                     </form>
                 </div>
 
-                <p className="text-center text-gray-500 text-sm">
+                {/* <p className="text-center text-gray-500 text-sm">
                     No account?{' '}
                     <Link href="/signup" className="text-stoic-action hover:text-stoic-action/80 font-semibold transition-colors">
                         Create one
                     </Link>
-                </p>
+                </p> */}
 
                 <p className="text-center text-gray-600 text-xs">
                     Authorized personnel only. All access is logged.
